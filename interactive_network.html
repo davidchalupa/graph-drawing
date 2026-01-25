@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Interactive sparse network — Cytoscape.js demo</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <script src="https://unpkg.com/cytoscape@3.25.1/dist/cytoscape.min.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/modern-normalize/modern-normalize.css">
+  <style>
+    html, body { height: 100%; margin: 0; font-family: Arial, sans-serif; }
+    #app { display: flex; height: 100vh; }
+    #controls { width: 320px; padding: 14px; box-sizing: border-box; background: #f7f7f7; border-right: 1px solid #e2e2e2; overflow: auto; }
+    #cy { flex: 1; height: 100%; position: relative; background: #fff; }
+    button, input, select { margin: 6px 0; width: 100%; padding: 8px; box-sizing: border-box; }
+    .row { display:flex; gap:8px; }
+    .small { width: 32%; }
+    label { font-size: 13px; display:block; margin-top:8px; color:#333; }
+    .hint { font-size:12px; color:#666; margin-top:6px; }
+    .mode-toggle { display:flex; gap:8px; margin-top:8px; }
+    .mode-toggle button { flex:1; padding:8px; }
+    .group { margin-bottom:10px; }
+    hr { border: none; border-top: 1px solid #e4e4e4; margin: 12px 0; }
+
+    /* metadata overlay in top-left of canvas */
+    #meta {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 999;
+      background: rgba(255,255,255,0.92);
+      color: #222;
+      padding: 8px 10px;
+      border-radius: 6px;
+      font-size: 13px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+      pointer-events: none; /* do not block interactions */
+      min-width: 160px;
+    }
+    #meta .meta-key { color: #666; font-size: 12px; display:block; }
+    #meta .meta-val { font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="controls">
+      <h3>Network viewer</h3>
+
+      <!-- LOAD FILE button moved to top -->
+      <div class="group">
+        <button id="btnLoadFile">Load from file</button>
+        <!-- hidden file input accepts any file type -->
+        <input id="fileInput" type="file" style="display:none">
+      </div>
+
+      <div class="group">
+        <label>Generation mode</label>
+        <div class="mode-toggle">
+          <button id="modeRandom" class="mode-btn active">Random</button>
+          <button id="modeBA" class="mode-btn">Barabási–Albert</button>
+        </div>
+
+        <!-- Random mode controls -->
+        <div id="randomControls">
+          <label>Nodes</label>
+          <input id="nodeCount" type="number" min="10" max="5000" value="1000"/>
+          <label>Average degree (approx)</label>
+          <input id="avgDeg" type="number" min="1" max="50" value="4"/>
+        </div>
+
+        <!-- BA mode controls -->
+        <div id="baControls" style="display:none;">
+          <label>Nodes</label>
+          <input id="baNodeCount" type="number" min="10" max="5000" value="1000"/>
+          <label>Edges per new node (m)</label>
+          <input id="baM" type="number" min="1" max="50" value="3"/>
+          <div class="hint">Barabási–Albert uses preferential attachment. Ensure m &lt; nodes.</div>
+        </div>
+
+        <button id="btnGenerate">Generate graph</button>
+      </div>
+
+      <div class="group">
+        <label>Layout</label>
+        <select id="layoutSelect">
+          <option value="preset">fast: preset (random)</option>
+          <option value="grid">fast: grid</option>
+          <option value="circle">fast: circle</option>
+          <option value="cose">slower: cose (better clustering)</option>
+        </select>
+        <button id="btnApplyLayout">Apply layout</button>
+      </div>
+
+      <div class="group">
+        <label>View controls</label>
+        <div class="row">
+          <button id="btnFit" class="small">Fit</button>
+          <button id="btnZoomIn" class="small">Zoom +</button>
+          <button id="btnZoomOut" class="small">Zoom −</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <label>Interaction</label>
+        <div class="hint">Pan: drag background. Zoom: wheel / pinch. Drag nodes: grab & move.</div>
+        <label>Search node id</label>
+        <input id="searchId" placeholder="e.g. n123">
+        <button id="btnSearch">Find & center</button>
+      </div>
+
+      <div class="group">
+        <label>Options</label>
+        <div class="row">
+          <button id="btnToggleLabels" class="small">Toggle labels</button>
+          <button id="btnReset" class="small">Reset</button>
+        </div>
+      </div>
+
+      <hr/>
+      <div style="font-size:13px;color:#444">
+        <strong>Performance tips</strong>
+        <ul style="padding-left:18px;">
+          <li>Hide labels for very large graphs</li>
+          <li>Use 'preset'/'grid'/'circle' for instant layouts</li>
+        </ul>
+      </div>
+    </div>
+
+    <div id="cy">
+      <!-- metadata overlay -->
+      <div id="meta" aria-hidden="true">
+        <div class="meta-key">Source</div><div id="metaSource" class="meta-val">Random</div>
+        <div class="meta-key">Nodes</div><div id="metaNodes" class="meta-val">0</div>
+        <div class="meta-key">Edges</div><div id="metaEdges" class="meta-val">0</div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
