@@ -4,7 +4,10 @@
   <meta charset="utf-8" />
   <title>Interactive sparse network — Cytoscape.js demo</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <!-- Cytoscape -->
   <script src="https://unpkg.com/cytoscape@3.25.1/dist/cytoscape.min.js"></script>
+  <!-- D3 (for incremental force layout) -->
+  <script src="https://unpkg.com/d3@7"></script>
   <link rel="stylesheet" href="https://unpkg.com/modern-normalize/modern-normalize.css">
   <style>
     html, body { height: 100%; margin: 0; font-family: Arial, sans-serif; }
@@ -86,8 +89,10 @@
           <option value="grid">fast: grid</option>
           <option value="circle">fast: circle</option>
           <option value="cose">slower: cose (better clustering)</option>
+          <option value="cose_large">cose (large)</option>
         </select>
         <button id="btnApplyLayout">Apply layout</button>
+		<button id="btnStopLayout">Stop layout</button>
       </div>
 
       <div class="group">
