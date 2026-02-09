@@ -762,6 +762,139 @@
         applyNodeStylingForN(currentData.nodes.length);
         updateMeta(lastFileName ? 'Loaded from file' : 'Generated', currentData.nodes.length, currentData.edges.length, lastFileName);
       }
+    } else if (choice === 'cose_random') {
+        // run incremental d3-force layout that updates the view as it progresses
+        if (!currentData) {
+          alert('No graph to layout. Generate or load one first.');
+          return;
+        }
+
+        // tuning scaled with number of nodes
+        const n = currentData.nodes.length;
+
+        // control parameters
+        const opts = {
+          maxTicks: Math.max(800, Math.min(6000, 400 + Math.round(n * 0.6))),
+          tickIntervalMs: 40,
+          chargeScale: -30 * Math.sqrt(n / 1000), // negative for repulsion
+          linkDistance: Math.max(20, Math.round(30 * Math.sqrt(n / 1000))),
+        };
+
+
+        // -------------------------------------------------
+        // HYBRID RANDOM INITIALISATION (new part)
+        // -------------------------------------------------
+
+        const jitterRadius = Math.max(80, 250 * Math.sqrt(n / 1000));
+
+        cy.nodes().forEach(node => {
+          const p = node.position();
+
+          // mild jitter around current position
+          node.position({
+            x: p.x + (Math.random() - 0.5) * jitterRadius,
+            y: p.y + (Math.random() - 0.5) * jitterRadius
+          });
+        });
+
+        // smooth fit so graph doesn't appear tiny
+        cy.fit(40);
+
+
+        // -------------------------------------------------
+
+        metaSource.textContent = `d3-force hybrid (running)`;
+
+        // run simulation and wait
+        await runD3ForceLayout(currentData, opts);
+
+        // after done: reapply final sizing & meta
+        if (currentData) {
+          applyNodeStylingForN(currentData.nodes.length);
+          updateMeta(
+            lastFileName ? 'Loaded from file' : 'Generated',
+            currentData.nodes.length,
+            currentData.edges.length,
+            lastFileName
+          );
+        }
+    } else if (choice === 'large_scale') {
+        if (!currentData) {
+          alert('No graph to layout. Generate or load one first.');
+          return;
+        }
+
+        const n = currentData.nodes.length;
+
+        // fraction of edges to use in coarse layout (for speed)
+        const edgeSampleRate = 0.5;
+
+        // FAST layout parameters
+        const optsFast = {
+          maxTicks: Math.round(200 + n * 0.25),
+          tickIntervalMs: 20,
+          chargeScale: -18 * Math.sqrt(n / 1000),
+          linkDistance: Math.max(18, Math.round(24 * Math.sqrt(n / 1000)))
+        };
+
+        // REFINE parameters
+        const optsRefine = {
+          maxTicks: Math.round(120 + n * 0.15),
+          tickIntervalMs: 30,
+          chargeScale: -25 * Math.sqrt(n / 1000),
+          linkDistance: Math.max(22, Math.round(30 * Math.sqrt(n / 1000)))
+        };
+
+        // --------------------------------------------------
+        // Phase 0 — Random jitter (cheap global symmetry break)
+        // --------------------------------------------------
+        const jitter = 200 * Math.sqrt(n / 1000);
+        cy.nodes().forEach(node => {
+          const p = node.position();
+          node.position({
+            x: p.x + (Math.random() - 0.5) * jitter,
+            y: p.y + (Math.random() - 0.5) * jitter
+          });
+        });
+
+        cy.fit(40);
+
+        // --------------------------------------------------
+        // Phase 1 — Coarse fast layout with sampled edges
+        // --------------------------------------------------
+        metaSource.textContent = `Fast layout (coarse)`;
+
+        // create a sampled edge set
+        const allEdges = [...currentData.edges];
+        const sampledEdges = allEdges.filter(() => Math.random() < edgeSampleRate);
+
+        // temporarily override edges for coarse layout
+        const originalEdges = currentData.edges;
+        currentData.edges = sampledEdges;
+
+        await runD3ForceLayout(currentData, optsFast);
+
+        // restore full edges for refinement
+        currentData.edges = originalEdges;
+
+        // --------------------------------------------------
+        // Phase 2 — Light refinement with full edges
+        // --------------------------------------------------
+        metaSource.textContent = `Fast layout (refine)`;
+        await runD3ForceLayout(currentData, optsRefine);
+
+        // --------------------------------------------------
+        // Final styling/meta
+        // --------------------------------------------------
+        if (currentData) {
+          applyNodeStylingForN(currentData.nodes.length);
+          updateMeta(
+            lastFileName ? 'Loaded from file' : 'Generated',
+            currentData.nodes.length,
+            currentData.edges.length,
+            lastFileName
+          );
+        }
     }
   });
 
