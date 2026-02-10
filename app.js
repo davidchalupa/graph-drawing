@@ -629,6 +629,240 @@
     metaNodes.textContent = String(nNodes);
     metaEdges.textContent = String(nEdges);
   }
+  
+  async function runStaticHubLayout() {
+  try {
+    if (!currentData) {
+      alert('No graph to layout. Generate or load one first.');
+      return;
+    }
+
+    const n = currentData.nodes.length;
+    const m = currentData.edges.length;
+
+    // Tunables (feel free to tweak)
+    let hubSelector = Math.round(Math.sqrt(n)); // number of hubs
+    hubSelector = Math.max(2, Math.min(hubSelector, Math.floor(n * 0.08))); // clamp
+    const HUB_CIRCLE_FRACTION = 0.14;   // fraction of TARGET_SPAN used for hub circle radius
+    const ringGap = Math.max(28, Math.round(TARGET_SPAN * 0.02)); // radial gap baseline
+    const radialJitterFactor = 0.35; // jitter ratio relative to ringGap
+    const angularJitter = 0.18; // jitter in radians around assigned angle
+    const minSector = 0.06; // minimal angular sector per hub
+    const hubAngularSpread = 0.95; // fraction of circle used by hubs (leave a bit of gap)
+
+    // Build adjacency and degree
+    const deg = new Map();
+    const adj = new Map();
+    for (const nd of currentData.nodes) {
+      deg.set(nd.data.id, 0);
+      adj.set(nd.data.id, []);
+    }
+    for (const e of currentData.edges) {
+      const a = String(e.data.source), b = String(e.data.target);
+      if (!adj.has(a) || !adj.has(b)) continue;
+      adj.get(a).push(b);
+      adj.get(b).push(a);
+      deg.set(a, (deg.get(a) || 0) + 1);
+      deg.set(b, (deg.get(b) || 0) + 1);
+    }
+
+    // Choose hubs: highest-degree nodes
+    const nodesArr = Array.from(currentData.nodes, nd => nd.data.id);
+    nodesArr.sort((a, b) => (deg.get(b) || 0) - (deg.get(a) || 0));
+    const hubs = nodesArr.slice(0, Math.max(1, Math.min(hubSelector, nodesArr.length)));
+    const hubCount = hubs.length;
+
+    // Multi-source BFS from hubs to assign owner and distance
+    const owner = new Map();   // node id -> hub id
+    const dist = new Map();    // node id -> distance (0 for hub)
+    const q = [];
+    for (let i = 0; i < hubCount; i++) {
+      const id = hubs[i];
+      owner.set(id, id);
+      dist.set(id, 0);
+      q.push(id);
+    }
+    while (q.length) {
+      const u = q.shift();
+      const d_u = dist.get(u);
+      for (const v of (adj.get(u) || [])) {
+        if (!dist.has(v)) {
+          dist.set(v, d_u + 1);
+          owner.set(v, owner.get(u));
+          q.push(v);
+        }
+      }
+    }
+    // isolated nodes fallback
+    for (const id of nodesArr) {
+      if (!owner.has(id)) { owner.set(id, id); dist.set(id, 0); if (!hubs.includes(id)) hubs.push(id); }
+    }
+
+    // Group nodes by owner hub and compute max distance per group
+    const groups = new Map();
+    const groupMaxDist = new Map();
+    for (const id of nodesArr) {
+      const h = owner.get(id);
+      if (!groups.has(h)) groups.set(h, []);
+      groups.get(h).push(id);
+    }
+    for (const [h, list] of groups) {
+      let mx = 0;
+      for (const id of list) {
+        mx = Math.max(mx, dist.get(id) || 0);
+      }
+      groupMaxDist.set(h, Math.max(1, mx)); // at least 1 to avoid division by zero
+    }
+
+    // ------------------ hub sector computation & angular relaxation ------------------
+
+    const totalAngle = Math.PI * 2 * hubAngularSpread;
+    const angleOffset = -totalAngle / 2;
+
+    // Compute sector sizes proportional to group size (clamped)
+    let totalGroupSize = 0;
+    for (const h of hubs) totalGroupSize += (groups.get(h) || []).length;
+    const hubSectors = new Map();
+    for (const h of hubs) {
+      const gSize = (groups.get(h) || []).length;
+      const sector = Math.max(minSector, (gSize / Math.max(1, totalGroupSize)) * totalAngle * 1.2);
+      hubSectors.set(h, sector);
+    }
+
+    // Initial hub angles from cumulative sectors (keeps large hubs separated)
+    const hubAngles = new Map();
+    let cursor = angleOffset;
+    for (let i = 0; i < hubCount; i++) {
+      const h = hubs[i];
+      const sector = hubSectors.get(h);
+      const center = cursor + sector / 2;
+      hubAngles.set(h, center);
+      cursor += sector;
+    }
+
+    // Small angular relaxation to avoid overlapping sectors (1D repulsion)
+    const relaxIters = 30;
+    const repelStrength = 0.18; // small step factor
+    for (let it = 0; it < relaxIters; it++) {
+      const adjustments = new Array(hubCount).fill(0);
+      for (let i = 0; i < hubCount; i++) {
+        const hi = hubs[i];
+        const ai = hubAngles.get(hi);
+        const si = hubSectors.get(hi);
+        for (let j = 0; j < hubCount; j++) {
+          if (i === j) continue;
+          const hj = hubs[j];
+          const aj = hubAngles.get(hj);
+          const sj = hubSectors.get(hj);
+          let d = ai - aj;
+          while (d <= -Math.PI) d += Math.PI*2;
+          while (d > Math.PI) d -= Math.PI*2;
+          const minSpacing = (si + sj) / 2 * 0.85;
+          if (Math.abs(d) < minSpacing) {
+            const sign = (d >= 0) ? 1 : -1;
+            const overlap = minSpacing - Math.abs(d);
+            adjustments[i] += sign * (overlap * repelStrength * (sj / (si + sj + 1e-9)));
+          }
+        }
+      }
+      for (let i = 0; i < hubCount; i++) {
+        const h = hubs[i];
+        let a = hubAngles.get(h);
+        a += adjustments[i];
+        if (a <= -Math.PI) a += Math.PI*2;
+        if (a > Math.PI) a -= Math.PI*2;
+        hubAngles.set(h, a);
+      }
+    }
+
+    // hub circle radius
+    const hubCircleRadius = Math.max(80, Math.round(TARGET_SPAN * HUB_CIRCLE_FRACTION));
+    // avg group size for scaling
+    const avgGroupSize = hubCount > 0 ? Math.max(1, Math.round(totalGroupSize / hubCount)) : 1;
+
+    // Build positions
+    const positions = {};
+
+    // Place hubs (slightly radial boost by degree)
+    for (let i = 0; i < hubCount; i++) {
+      const id = hubs[i];
+      const a = hubAngles.get(id);
+      const degreeBoost = Math.log2((deg.get(id) || 1) + 1);
+      const r = hubCircleRadius + degreeBoost * (ringGap * 0.6) + (Math.random() - 0.5) * ringGap * 0.15;
+      positions[id] = { x: Math.cos(a) * r, y: Math.sin(a) * r };
+    }
+
+    // Place group members inside each hub's sector using weighted spacing
+    for (let i = 0; i < hubCount; i++) {
+      const hubId = hubs[i];
+      const group = (groups.get(hubId) || []).slice();
+      const hubIndexInGroup = group.indexOf(hubId);
+      if (hubIndexInGroup !== -1) group.splice(hubIndexInGroup, 1);
+
+      group.sort((u, v) => (dist.get(u) || 0) - (dist.get(v) || 0) || ((deg.get(v) || 0) - (deg.get(u) || 0)));
+
+      const sector = hubSectors.get(hubId) || minSector;
+      const hubAngle = hubAngles.get(hubId);
+      const startAngle = hubAngle - sector / 2;
+      const maxD = groupMaxDist.get(hubId) || 1;
+
+      const weights = group.map(id => (Math.log2((deg.get(id) || 0) + 2)));
+      const wSum = weights.reduce((s,v)=>s+v, 0) || 1;
+      let acc = 0;
+      for (let j = 0; j < group.length; j++) {
+        const id = group[j];
+        const w = weights[j];
+        const frac = (acc + w * 0.5) / wSum;
+        acc += w;
+        const angle = startAngle + frac * sector + (Math.random() - 0.5) * angularJitter;
+        const sizeFactor = 1 + 0.6 * (group.length / Math.max(1, avgGroupSize));
+        const d = Math.max(1, dist.get(id) || 1);
+        const depthMultiplier = Math.max(1.0, Math.log2(maxD + 1) + 1.0);
+        const r = hubCircleRadius + (d / (maxD)) * (ringGap * depthMultiplier * sizeFactor) + (Math.random() - 0.5) * ringGap * radialJitterFactor;
+        positions[id] = { x: Math.cos(angle) * r, y: Math.sin(angle) * r };
+      }
+    }
+
+    // Small post-pass: detect local overcrowding and push slightly outward
+    const ids = Object.keys(positions);
+    const NN_THRESHOLD = Math.max(8, Math.round(TARGET_SPAN * 0.01)); // pixels
+    for (let i = 0; i < ids.length; i++) {
+      const id = ids[i];
+      const p = positions[id];
+      let minD = Infinity;
+      for (let j = 0; j < Math.min(i, 600); j++) {
+        const q = positions[ids[j]];
+        const dx = p.x - q.x, dy = p.y - q.y;
+        const dd = Math.sqrt(dx*dx + dy*dy);
+        if (dd < minD) minD = dd;
+      }
+      if (minD < NN_THRESHOLD) {
+        const ang = Math.atan2(p.y, p.x) || 0;
+        const push = (NN_THRESHOLD - minD) * 0.6;
+        positions[id].x += Math.cos(ang) * push;
+        positions[id].y += Math.sin(ang) * push;
+      }
+    }
+
+    // Normalize and apply
+    const norm = normalizePositions(positions, TARGET_SPAN);
+    for (const id in norm) {
+      const el = cy.getElementById(id);
+      if (el) el.position(norm[id]);
+    }
+
+    // housekeeping
+    applyNodeStylingForN(n);
+    cy.fit(30);
+    currentPositions = norm;
+    updateMeta(lastFileName ? 'Loaded from file' : 'Static hub layout', currentData.nodes.length, currentData.edges.length, lastFileName);
+
+    return;
+  } catch (err) {
+    console.error('runStaticHubLayout error:', err);
+    alert('Layout failed — see console for details.');
+  }
+}
 
   function loadAndRender(data, presetType = 'preset', sourceLabel = 'Generated', filename = null) {
     // cancel any running simulation before changing graph
@@ -863,14 +1097,19 @@
         // Phase 1 — Coarse fast layout with sampled edges
         // --------------------------------------------------
         metaSource.textContent = `Fast layout (coarse)`;
+		
+		// create a sampled copy for the coarse layout (do NOT mutate currentData)
+		const allEdges = currentData.edges;
+		const sampledEdges = allEdges.filter(() => Math.random() < edgeSampleRate);
 
-        // create a sampled edge set
-        const allEdges = [...currentData.edges];
-        const sampledEdges = allEdges.filter(() => Math.random() < edgeSampleRate);
+		// shallow copy of nodes (nodes won't be mutated)
+		const sampledData = {
+		  nodes: currentData.nodes,            // you can reuse node objects
+		  edges: sampledEdges                  // only edges differ
+		};
 
-        // temporarily override edges for coarse layout
-        const originalEdges = currentData.edges;
-        currentData.edges = sampledEdges;
+		// run coarse on the sampled copy
+		await runD3ForceLayout(sampledData, optsFast);
 
         await runD3ForceLayout(currentData, optsFast);
 
@@ -895,7 +1134,15 @@
             lastFileName
           );
         }
-    }
+    } else if (choice === 'large_scale_static') {
+		// static hub-based layout (scale-free heuristic)
+		if (!currentData) {
+		  alert('No graph to layout. Generate or load one first.');
+		  return;
+		}
+
+		await runStaticHubLayout();
+	}
   });
 
   btnFit.addEventListener('click', () => cy.fit(20));
