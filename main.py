@@ -3,7 +3,8 @@ import random
 import numpy as np
 import networkx as nx
 import matplotlib.pyplot as plt
-
+from scipy import sparse
+from scipy.sparse.linalg import spsolve
 
 # convex hull (monotone chain)
 def convex_hull(points):
@@ -52,23 +53,34 @@ def tutte_embedding_auto(G):
     idx = {v:i for i,v in enumerate(interior)}
 
     n = len(interior)
-    A = np.zeros((n,n))
-    bx = np.zeros(n)
-    by = np.zeros(n)
+    n = len(interior)
+    rows = []
+    cols = []
+    data = []
+    bx = np.zeros(n, dtype=float)
+    by = np.zeros(n, dtype=float)
 
     for v in interior:
         i = idx[v]
-        neighbors = list(G.neighbors(v))
-        A[i,i] = len(neighbors)
-        for u in neighbors:
+        nbrs = list(G.neighbors(v))
+        degv = len(nbrs)
+        rows.append(i);
+        cols.append(i);
+        data.append(degv)
+        for u in nbrs:
             if u in boundary:
                 bx[i] += boundary_pos[u][0]
                 by[i] += boundary_pos[u][1]
             else:
-                A[i,idx[u]] -= 1
+                j = idx[u]
+                rows.append(i);
+                cols.append(j);
+                data.append(-1.0)
 
-    x = np.linalg.solve(A, bx)
-    y = np.linalg.solve(A, by)
+    # sparse solve
+    A_csr = sparse.csr_matrix((data, (rows, cols)), shape=(n, n))
+    x = spsolve(A_csr, bx)
+    y = spsolve(A_csr, by)
 
     pos = dict(boundary_pos)
     for v,i in idx.items():
@@ -208,28 +220,41 @@ def low_crossing_layout_auto(G,
 
     idx = {v: i for i, v in enumerate(interior)}
     n_in = len(interior)
-    A = np.zeros((n_in, n_in), dtype=float)
+
+    # build sparse representation from triplets (rows, cols, data)
+    rows = []
+    cols = []
+    data = []
     bx = np.zeros(n_in, dtype=float)
     by = np.zeros(n_in, dtype=float)
 
     for i, v in enumerate(interior):
         nbrs = list(S.neighbors(v))
         degv = len(nbrs)
-        A[i, i] = degv
+        rows.append(i)
+        cols.append(i)
+        data.append(degv)
         for w in nbrs:
             if w in boundary_set:
                 bx[i] += boundary_pos[w][0]
                 by[i] += boundary_pos[w][1]
             else:
                 j = idx[w]
-                A[i, j] -= 1.0
+                rows.append(i)
+                cols.append(j)
+                data.append(-1.0)
+
+    # sparse construction of matrix A
+    A_csr = sparse.csr_matrix((data, (rows, cols)), shape=(n_in, n_in))
 
     try:
-        sol_x = np.linalg.solve(A, bx)
-        sol_y = np.linalg.solve(A, by)
+        # sparse solve
+        sol_x = spsolve(A_csr, bx)
+        sol_y = spsolve(A_csr, by)
     except np.linalg.LinAlgError:
-        sol_x, *_ = np.linalg.lstsq(A, bx, rcond=None)
-        sol_y, *_ = np.linalg.lstsq(A, by, rcond=None)
+        A_dense = A_csr.toarray()
+        sol_x, *_ = np.linalg.lstsq(A_dense, bx, rcond=None)
+        sol_y, *_ = np.linalg.lstsq(A_dense, by, rcond=None)
 
     pos = {}
     for v, i in idx.items():
@@ -299,7 +324,7 @@ def load_from_col_file(file_path):
     return G
 
 # G = get_example_graph()
-G = load_from_col_file("data/example4.col")
+G = load_from_col_file("data/example5.col")
 
 print(f"Loaded a graph with {G.number_of_nodes()} nodes and {G.number_of_edges()} edges.")
 
