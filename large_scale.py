@@ -152,6 +152,53 @@ def compute_radial_hde_layout(G, k=30):
 
     return pos
 
+def compute_symmetric_radial_hde_layout(G, k=30):
+    nodes = list(G.nodes())
+    num_nodes = len(nodes)
+
+    # 1. Standard HDE Distance Logic
+    sorted_nodes = sorted(G.nodes(), key=lambda n: G.degree(n), reverse=True)
+    pivots = sorted_nodes[:k]
+    dist_matrix = np.zeros((num_nodes, k))
+    for j, pivot in enumerate(pivots):
+        lengths = nx.single_source_shortest_path_length(G, pivot)
+        default_dist = max(lengths.values()) + 1 if lengths else 0
+        for i, node in enumerate(nodes):
+            dist_matrix[i, j] = lengths.get(node, default_dist)
+
+    # 2. PCA for relative ordering
+    pca = PCA(n_components=2)
+    pca_coords = pca.fit_transform(dist_matrix)
+
+    # Calculate raw angles and raw mean distances
+    raw_angles = np.arctan2(pca_coords[:, 1], pca_coords[:, 0])
+    raw_mean_dists = np.mean(dist_matrix, axis=1)
+
+    # 3. Rank-Based Distribution (The "Symmetry" Fix)
+    # We sort the nodes by their raw values and re-map them to a uniform range.
+    # This preserves 'who is next to whom' but forces even spacing.
+
+    # Evenly space angles from 0 to 2*pi based on PCA order
+    angle_ranks = np.argsort(np.argsort(raw_angles))
+    even_angles = (angle_ranks / num_nodes) * 2 * np.pi
+
+    # Evenly space radii from 0 to max based on distance order
+    # Using sqrt(rank) spreads the core more effectively by area
+    dist_ranks = np.argsort(np.argsort(raw_mean_dists))
+    even_radii = np.sqrt(dist_ranks / num_nodes)
+
+    # 4. Final Coordinate Mapping
+    pos = {}
+    for i, node in enumerate(nodes):
+        theta = even_angles[i]
+        r = even_radii[i]
+
+        x = r * np.cos(theta)
+        y = r * np.sin(theta)
+        pos[node] = np.array([x, y])
+
+    return pos
+
 def compute_spectral_refined_layout(G, iterations_refinement=5):
     """
     Computes a spectral layout refined by a few iterations of spring layout to
@@ -227,6 +274,85 @@ def visualize_graph_dark_theme(G, pos, title):
     plt.tight_layout()
     plt.show()
 
+def compute_hde_core_layout(G, k=30, neighborhood_depth=1):
+    from sklearn.preprocessing import StandardScaler
+    """
+    Displays only the 'core' of the graph.
+    1. Identifies top k hubs.
+    2. Includes only hubs and their immediate neighbors.
+    3. Projects them into a symmetric 2D space.
+    """
+    # 1. Identify the Core nodes
+    sorted_nodes = sorted(G.nodes(), key=lambda n: G.degree(n), reverse=True)
+    pivots = sorted_nodes[:k]
+
+    # Expand core to include neighbors (optional, set depth=0 for hubs only)
+    core_set = set(pivots)
+    for _ in range(neighborhood_depth):
+        neighbors = set()
+        for node in core_set:
+            neighbors.update(G.neighbors(node))
+        core_set.update(neighbors)
+
+    core_nodes = list(core_set)
+    node_to_idx = {node: i for i, node in enumerate(core_nodes)}
+
+    # 2. Build Distance Matrix for the Core only
+    # We measure distances from every core node to every pivot hub
+    dist_matrix = np.zeros((len(core_nodes), k))
+    for j, pivot in enumerate(pivots):
+        lengths = nx.single_source_shortest_path_length(G, pivot)
+        for i, node in enumerate(core_nodes):
+            dist_matrix[i, j] = lengths.get(node, k)  # 'k' as a penalty for distance
+
+    # 3. Force Symmetry via Whitened PCA
+    # Whitening scales the components to equal variance, turning a 'blob' into a 'circle'
+    pca = PCA(n_components=2, whiten=True)
+    coords = pca.fit_transform(dist_matrix)
+
+    # Standardize to ensure the center of the core is at (0,0)
+    coords = StandardScaler().fit_transform(coords)
+
+    pos = {node: coords[node_to_idx[node]] for node in core_nodes}
+
+    visualize_core(G_demo, pos, pivots)
+    return pos
+
+def visualize_core(G, pos, pivots):
+    """
+    Visualizes the core safely by ignoring nodes not in 'pos'.
+    """
+    plt.figure(figsize=(10, 10))
+
+    # 1. Only consider nodes that exist in our layout
+    core_nodes = list(pos.keys())
+
+    edgelist = [e for e in G.edges() if e[0] in pos and e[1] in pos]
+
+    # 3. Aesthetics
+    # Use G.degree to get the 'importance' based on the full graph
+    node_degrees = dict(G.degree())
+    sizes = [node_degrees[n] * 5 for n in core_nodes]
+
+    # Red for pivots, Skyblue for others
+    node_colors = ['#ff4444' if n in pivots else '#88ccee' for n in core_nodes]
+
+    # 4. Drawing
+    # Draw edges first (background)
+    nx.draw_networkx_edges(G, pos, edgelist=edgelist, alpha=0.1, edge_color='gray')
+
+    # Draw nodes (foreground)
+    nx.draw_networkx_nodes(G, pos,
+                           nodelist=core_nodes,
+                           node_size=sizes,
+                           node_color=node_colors,
+                           linewidths=0.5,
+                           edgecolors='white')
+
+    plt.title(f"HDE Core Visualization ({len(core_nodes)} nodes)")
+    plt.axis('off')
+    plt.show()
+
 if __name__ == "__main__":
     N = 5000
     M = 2
@@ -243,12 +369,17 @@ if __name__ == "__main__":
     # positions = compute_hde_layout(G_demo)
     # title = "BA graph: HDE layout"
 
-    positions = compute_radial_hde_layout(G_demo)
-    title = "BA graph: radial HDE layout"
+    # positions = compute_radial_hde_layout(G_demo)
+    # positions = compute_symmetric_radial_hde_layout(G_demo)
+    # title = "BA graph: radial HDE layout"
 
     # positions = compute_spectral_refined_layout(G_demo)
     # title = "BA graph: refined spectral layout"
 
-    print("Visualizing...")
+    # print("Visualizing...")
     # visualize_graph(G_demo, positions, title=title)
-    visualize_graph_dark_theme(G_demo, positions, title=title)
+    # visualize_graph_dark_theme(G_demo, positions, title=title)
+
+    positions = compute_hde_core_layout(G_demo)
+    title = "BA graph: core HDE layout"
+
