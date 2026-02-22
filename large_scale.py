@@ -97,6 +97,61 @@ def compute_hde_layout(G, k=30):
     return pos
 
 
+def compute_radial_hde_layout(G, k=30):
+    """
+    Computes a radial variant of the HDE layout.
+    1. Selects k pivot nodes (hubs).
+    2. Calculates shortest path distances.
+    3. Uses PCA to determine angular orientation.
+    4. Uses mean distance to pivots to determine the radius.
+    """
+    nodes = list(G.nodes())
+
+    # select pivots (high-degree hubs)
+    sorted_nodes = sorted(G.nodes(), key=lambda n: G.degree(n), reverse=True)
+    pivots = sorted_nodes[:k]
+
+    # build distance matrix (V x k)
+    dist_matrix = np.zeros((len(G), k))
+    for j, pivot in enumerate(pivots):
+        lengths = nx.single_source_shortest_path_length(G, pivot)
+        # Fill missing values with a large distance if graph is disconnected
+        default_dist = max(lengths.values()) + 1 if lengths else 0
+        for i, node in enumerate(nodes):
+            dist_matrix[i, j] = lengths.get(node, default_dist)
+
+    # PCA for angular distribution
+    # we use PCA to find the 'direction' of a node relative to the hub cluster
+    # instead of calculating the positions directly
+    pca = PCA(n_components=2)
+    pca_coords = pca.fit_transform(dist_matrix)
+
+    # pre-calculate means to find the closest possible center point
+    mean_dists = np.mean(dist_matrix, axis=1)
+    min_dist = np.min(mean_dists)
+
+    # transform these to radial coordinates
+    pos = {}
+    for i, node in enumerate(nodes):
+        theta = np.arctan2(pca_coords[i, 1], pca_coords[i, 0])
+
+        # determine the node's "gravity":
+        # how close is this node to the main hubs on average
+        # the closer it is, the closer it stays to the center (low r)
+        # subtraction centers the hubs at 0.
+        # squaring (or cubing) creates the "core vs shell" distinction
+        r = (mean_dists[i] - min_dist) ** 2
+
+        # place the node on the map
+        # we take the direction (theta) and the distance (r)
+        # and "unfold" them into standard X and Y coordinates (polar to Cartesian coordinates)
+        x = r * np.cos(theta)
+        y = r * np.sin(theta)
+
+        pos[node] = np.array([x, y])
+
+    return pos
+
 def compute_spectral_refined_layout(G, iterations_refinement=5):
     """
     Computes a spectral layout refined by a few iterations of spring layout to
@@ -185,8 +240,11 @@ if __name__ == "__main__":
     # positions = compute_organic_radial(G_demo)
     # title = "BA graph: organic radial layout"
 
-    positions = compute_hde_layout(G_demo)
-    title = "BA graph: HDE layout"
+    # positions = compute_hde_layout(G_demo)
+    # title = "BA graph: HDE layout"
+
+    positions = compute_radial_hde_layout(G_demo)
+    title = "BA graph: radial HDE layout"
 
     # positions = compute_spectral_refined_layout(G_demo)
     # title = "BA graph: refined spectral layout"
