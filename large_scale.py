@@ -1,6 +1,7 @@
 import networkx as nx
 import matplotlib.pyplot as plt
 import numpy as np
+from sklearn.decomposition import PCA
 
 
 def compute_radial_layout(G):
@@ -32,39 +33,11 @@ def compute_radial_layout(G):
 
     return pos
 
-
-def visualize_graph(G, pos, title):
-    """
-    Renders the graph using the provided positions.
-    Optimized for ~5000 nodes using small markers and transparency.
-    """
-    plt.figure(figsize=(12, 12))
-
-    # Draw edges with low alpha to prevent a 'hairball' effect
-    nx.draw_networkx_edges(G, pos, alpha=0.05, edge_color='gray', width=0.5)
-
-    # Draw nodes; color them by degree to highlight hubs
-    degrees = [G.degree(n) for n in G.nodes()]
-    nodes = nx.draw_networkx_nodes(
-        G, pos,
-        node_size=10,
-        node_color=degrees,
-        cmap=plt.cm.viridis,
-        alpha=0.8
-    )
-
-    plt.colorbar(nodes, label='Node Degree')
-    plt.title(title)
-    plt.axis('off')
-    plt.show()
-
-
 def compute_organic_radial(G):
     """
     Constructive radial layout with a spiral jitter to
     break up the 'concentric ring' look.
     """
-    # 1. Root selection (Highest degree hub)
     root = max(G.nodes, key=G.degree)
     levels = nx.single_source_shortest_path_length(G, root)
 
@@ -84,44 +57,6 @@ def compute_organic_radial(G):
             pos[node] = np.array([radius * np.cos(angle), radius * np.sin(angle)])
 
     return pos
-
-
-def visualize_graph_dark_theme(G, pos, title):
-    # set the dark mode
-    plt.style.use('dark_background')
-    fig, ax = plt.subplots(figsize=(14, 14))
-
-    degrees = dict(G.degree())
-    max_deg = max(degrees.values())
-
-    nx.draw_networkx_edges(
-        G, pos,
-        alpha=0.03,
-        edge_color='cyan',
-        width=0.3,
-        ax=ax
-    )
-
-    # size and color of nodes based on their degrees
-    node_sizes = [((degrees[n] / max_deg) * 50) + 2 for n in G.nodes()]
-
-    nodes = nx.draw_networkx_nodes(
-        G, pos,
-        node_size=node_sizes,
-        node_color=list(degrees.values()),
-        cmap=plt.cm.magma,
-        alpha=0.9,
-        ax=ax
-    )
-
-    ax.set_axis_off()
-    plt.title(title,
-              color='white', fontsize=16, pad=20)
-
-    plt.show()
-
-
-from sklearn.decomposition import PCA
 
 
 def compute_hde_layout(G, k=30):
@@ -162,6 +97,81 @@ def compute_hde_layout(G, k=30):
     return pos
 
 
+def compute_spectral_refined_layout(G, iterations_refinement=5):
+    """
+    Computes a spectral layout refined by a few iterations of spring layout to
+    spread out the center of the graph that would otherwise appear as a small blob.
+    """
+    print("Computing spectral skeleton...")
+    pos_init = nx.spectral_layout(G)
+
+    print("Expanding the core...")
+    pos = nx.spring_layout(
+        G,
+        pos=pos_init,
+        iterations=iterations_refinement,
+        # k controls the optimal distance between nodes
+        k=2 / np.sqrt(len(G))
+    )
+    return pos
+
+def visualize_graph(G, pos, title):
+    """
+    Renders the graph using the provided positions.
+    Optimized for ~5000 nodes using small markers and transparency.
+    """
+    plt.figure(figsize=(12, 12))
+
+    nx.draw_networkx_edges(G, pos, alpha=0.15, edge_color='gray', width=0.5)
+
+    degrees = [G.degree(n) for n in G.nodes()]
+    nodes = nx.draw_networkx_nodes(
+        G, pos,
+        node_size=10,
+        node_color=degrees,
+        cmap=plt.cm.viridis,
+        alpha=0.8
+    )
+
+    plt.colorbar(nodes, label='Node Degree')
+    plt.title(title)
+    plt.axis('off')
+    plt.show()
+
+def visualize_graph_dark_theme(G, pos, title):
+    plt.style.use('dark_background')
+    fig, ax = plt.subplots(figsize=(12, 12))
+
+    degrees = dict(G.degree())
+    max_deg = max(degrees.values()) if degrees else 1
+    degree_values = [degrees[n] for n in G.nodes()]
+
+    nx.draw_networkx_edges(
+        G, pos,
+        alpha=0.15,
+        edge_color='#1E90FF',
+        width=0.5,
+        ax=ax
+    )
+
+    node_sizes = [((d / max_deg) * 55) + 8 for d in degree_values]
+
+    nodes = nx.draw_networkx_nodes(
+        G, pos,
+        node_size=node_sizes,
+        node_color=degree_values,
+        cmap=plt.cm.cool,
+        alpha=0.6,
+        ax=ax
+    )
+
+    ax.set_aspect('equal')
+    ax.set_axis_off()
+
+    plt.title(title, color='white', fontsize=18, pad=20, alpha=0.8)
+    plt.tight_layout()
+    plt.show()
+
 if __name__ == "__main__":
     N = 5000
     M = 2
@@ -170,12 +180,17 @@ if __name__ == "__main__":
 
     print("Computing graph layout...")
     # positions = compute_radial_layout(G_demo)
-    # positions = compute_organic_radial(G_demo)
-    positions = compute_hde_layout(G_demo)
-
     # title = "BA graph: radial layout"
+
+    # positions = compute_organic_radial(G_demo)
+    # title = "BA graph: organic radial layout"
+
+    positions = compute_hde_layout(G_demo)
     title = "BA graph: HDE layout"
 
+    # positions = compute_spectral_refined_layout(G_demo)
+    # title = "BA graph: refined spectral layout"
+
     print("Visualizing...")
-    visualize_graph(G_demo, positions, title=title)
-    # visualize_graph_dark_theme(G_demo, positions, title=title)
+    # visualize_graph(G_demo, positions, title=title)
+    visualize_graph_dark_theme(G_demo, positions, title=title)
