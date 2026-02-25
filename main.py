@@ -324,7 +324,7 @@ def load_from_col_file(file_path):
     return G
 
 # G = get_example_graph()
-G = load_from_col_file("data/example5.col")
+G = load_from_col_file("data/example7.col")
 
 print(f"Loaded a graph with {G.number_of_nodes()} nodes and {G.number_of_edges()} edges.")
 
