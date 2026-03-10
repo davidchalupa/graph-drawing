@@ -4,14 +4,50 @@ import numpy as np
 from sklearn.decomposition import PCA
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QGraphicsView, QGraphicsScene,
-    QFileDialog, QProgressDialog, QPushButton, QHBoxLayout, QWidget
+    QFileDialog, QProgressDialog, QPushButton, QHBoxLayout, QVBoxLayout, QWidget
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QPen, QBrush, QPainter, QAction
 import math
 import random
+import time
 from scipy import sparse
 from scipy.sparse.linalg import spsolve
+
+from analyze_graph.dominating_set import minimum_dominating_set_ilp
+
+
+class DominatingSetThread(QThread):
+    finished_computing = pyqtSignal(list)
+
+    def __init__(self, G):
+        super().__init__()
+        self.G = G
+
+    def run(self):
+        if not self.G or not self.G.nodes:
+            self.finished_computing.emit([])
+            return
+
+        # Trigger the algorithm
+        dom_set = self.compute_algorithm_ilp(self.G)
+        self.finished_computing.emit(dom_set if dom_set is not None else [])
+
+    def compute_algorithm_ilp(self, G):
+        """
+        Placeholder function for your Dominating Set Algorithm 1.
+        """
+        print("Computing minimum dominating set of the graph...")
+
+        mds = minimum_dominating_set_ilp(G, timeLimit=120)
+
+        if mds is not None:
+            print(f"Found a dominating set of size {len(mds)}.")
+            return mds
+        else:
+            print(f"No feasible solution found.")
+            return None
+
 
 class LayoutThread(QThread):
     layout_finished = pyqtSignal(dict)
@@ -29,8 +65,8 @@ class LayoutThread(QThread):
         if self.mode == "pca":
             pos = self.compute_hde_layout(self.G)
             for node in pos:
-                pos[node][0] *= 200
-                pos[node][1] *= 200
+                pos[node][0] *= 150
+                pos[node][1] *= 150
         elif self.mode == "lowcross":
             pos = self.low_crossing_layout_auto(self.G)
             for node in pos:
@@ -68,32 +104,6 @@ class LayoutThread(QThread):
                                  prefer_edge_order='degprod',
                                  refine_iterations=60,
                                  coarse_random_seed=None):
-        """
-        Constructive heuristic layout for (possibly non-planar) graph G.
-        Returns a dict mapping node -> (x,y) positions (floats).
-
-        Strategy:
-          1. Greedy build a planar subgraph S by trying to add edges in a chosen order
-             (default: by product of endpoint degrees).
-          2. Find a simple cycle in S to use as boundary (longest cycle from cycle_basis).
-          3. Compute Tutte (barycentric) embedding for S with boundary fixed on a circle.
-          4. Run a short Spring layout (Fruchterman-Reingold) on the original G,
-             initialized from Tutte positions, keeping boundary nodes fixed.
-
-        Parameters
-        ----------
-        G : networkx.Graph
-            Input graph (unchanged).
-        prefer_edge_order : {'degprod','degsum','random'}
-            Ordering heuristic for greedily building the planar subgraph.
-            'degprod' - edges sorted by degree(u)*degree(v) descending (keeps hub-links earlier).
-            'degsum'  - edges sorted by degree(u)+degree(v) descending.
-            'random'  - random order.
-        refine_iterations : int
-            Number of iterations to run networkx.spring_layout for refinement stage.
-        coarse_random_seed : int or None
-            Optional RNG seed for reproducibility when random choices happen.
-        """
         if coarse_random_seed is not None:
             random.seed(coarse_random_seed)
             np.random.seed(coarse_random_seed)
@@ -116,14 +126,12 @@ class LayoutThread(QThread):
         else:
             random.shuffle(edges)
 
-        # Greedily add edges if planarity preserved (use current networkx API)
         for (u, v) in edges:
             S.add_edge(u, v)
-            is_planar, _embedding = nx.check_planarity(S)  # <--- corrected: no 'embed' kw
+            is_planar, _embedding = nx.check_planarity(S)
             if not is_planar:
                 S.remove_edge(u, v)
 
-        # fallback if S has no edges
         if S.number_of_edges() == 0 or S.number_of_nodes() == 0:
             pos = nx.spring_layout(G, iterations=refine_iterations)
             return {n: tuple(pos[n]) for n in G.nodes()}
@@ -197,7 +205,6 @@ class LayoutThread(QThread):
         idx = {v: i for i, v in enumerate(interior)}
         n_in = len(interior)
 
-        # build sparse representation from triplets (rows, cols, data)
         rows = []
         cols = []
         data = []
@@ -220,11 +227,9 @@ class LayoutThread(QThread):
                     cols.append(j)
                     data.append(-1.0)
 
-        # sparse construction of matrix A
         A_csr = sparse.csr_matrix((data, (rows, cols)), shape=(n_in, n_in))
 
         try:
-            # sparse solve
             sol_x = spsolve(A_csr, bx)
             sol_y = spsolve(A_csr, by)
         except np.linalg.LinAlgError:
@@ -241,7 +246,7 @@ class LayoutThread(QThread):
             if v not in pos:
                 pos[v] = np.array([0.0, 0.0], dtype=float)
 
-        # --- 4) refinement: short spring layout keeping boundary fixed ---
+        # --- 4) refinement ---
         try:
             pos_refined = nx.spring_layout(G, pos=pos, fixed=list(boundary), iterations=max(10, refine_iterations))
             pos = {v: np.array(pos_refined[v], dtype=float) for v in G.nodes()}
@@ -250,7 +255,6 @@ class LayoutThread(QThread):
                 if v not in pos or np.allclose(pos[v], 0.0):
                     pos[v] = np.array([random.uniform(-0.1, 0.1), random.uniform(-0.1, 0.1)], dtype=float)
 
-        # normalize & scale
         xs = np.array([p[0] for p in pos.values()])
         ys = np.array([p[1] for p in pos.values()])
         minx, maxx = xs.min(), xs.max()
@@ -265,48 +269,54 @@ class LayoutThread(QThread):
 
         return out
 
+
 class GraphCanvas(QGraphicsView):
     def __init__(self):
         super().__init__()
         self.scene = QGraphicsScene(self)
         self.setScene(self.scene)
 
-        self.setAlignment(Qt.AlignmentFlag.AlignCenter)  # Changed to Center for better fit
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setBackgroundBrush(QColor("#0d0d0d"))
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
 
-    def display_graph(self, G, pos):
+    def display_graph(self, G, pos, highlight_nodes=None):
         self.scene.clear()
         if not G or not pos:
             return
+
+        if highlight_nodes is None:
+            highlight_nodes = []
+        highlight_set = set(highlight_nodes)
 
         edge_pen = QPen(QColor(80, 80, 80, 100), 1)
         for u, v in G.edges():
             if u in pos and v in pos:
                 self.scene.addLine(pos[u][0], pos[u][1], pos[v][0], pos[v][1], edge_pen)
 
-        node_brush = QBrush(QColor("#00f2ff"))
+        normal_brush = QBrush(QColor("#00f2ff"))
+        highlight_brush = QBrush(QColor("#FF8C00"))  # Bright orange for highlighting
         node_pen = QPen(Qt.GlobalColor.black, 1)
+
         for node in G.nodes():
             if node in pos:
                 x, y = pos[node]
-                ellipse = self.scene.addEllipse(x - 5, y - 5, 10, 10, node_pen, node_brush)
-                ellipse.setZValue(1)
+                is_highlighted = node in highlight_set
 
-        # --- KEY CHANGE START ---
-        # Get the rectangle containing all items
+                brush = highlight_brush if is_highlighted else normal_brush
+                radius = 7 if is_highlighted else 5
+                diameter = radius * 2
+
+                ellipse = self.scene.addEllipse(x - radius, y - radius, diameter, diameter, node_pen, brush)
+                ellipse.setZValue(2 if is_highlighted else 1)
+
         rect = self.scene.itemsBoundingRect()
-
-        # Apply a small margin so nodes aren't touching the window edges
         margin = 50
         self.setSceneRect(rect.adjusted(-margin, -margin, margin, margin))
-
-        # Scale the view to fit the graph within the current window size
         self.fitInView(self.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
-        # --- KEY CHANGE END ---
 
     def wheelEvent(self, event):
         zoom_factor = 1.25 if event.angleDelta().y() > 0 else 0.8
@@ -335,7 +345,13 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Network Graph Visualizer")
+
         self.current_graph = None
+        self.current_pos = None
+
+        self.dominating_set = []
+        self.show_dominating_set = False
+
         self.canvas = GraphCanvas()
         self.setCentralWidget(self.canvas)
         self._setup_overlay_buttons()
@@ -344,7 +360,38 @@ class MainWindow(QMainWindow):
 
     def _setup_overlay_buttons(self):
         self.overlay_panel = QWidget(self)
-        layout = QHBoxLayout(self.overlay_panel)
+        v_layout = QVBoxLayout(self.overlay_panel)
+        v_layout.setContentsMargins(0, 0, 0, 0)
+        v_layout.setSpacing(10)
+
+        # Toggle Button Row
+        self.btn_toggle_ds = QPushButton("👁 Show Dominating Set")
+        self.btn_toggle_ds.setCheckable(True)
+        self.btn_toggle_ds.setEnabled(False)  # Disabled until computed
+        self.btn_toggle_ds.clicked.connect(self.toggle_dominating_set)
+
+        h_toggle_layout = QHBoxLayout()
+        h_toggle_layout.addWidget(self.btn_toggle_ds)
+        h_toggle_layout.addStretch()
+        v_layout.addLayout(h_toggle_layout)
+
+        # Layout Buttons Row
+        self.btn_pca = QPushButton("📉 HDE (PCA) layout")
+        self.btn_pca.clicked.connect(lambda: self.run_layout("pca"))
+
+        self.btn_spring = QPushButton("🕸 Spring layout")
+        self.btn_spring.clicked.connect(lambda: self.run_layout("spring"))
+
+        self.btn_lowcross = QPushButton("📐 Low-crossing")
+        self.btn_lowcross.clicked.connect(lambda: self.run_layout("lowcross"))
+
+        h_layout_btns = QHBoxLayout()
+        h_layout_btns.addWidget(self.btn_pca)
+        h_layout_btns.addWidget(self.btn_spring)
+        h_layout_btns.addWidget(self.btn_lowcross)
+        h_layout_btns.addStretch()
+        v_layout.addLayout(h_layout_btns)
+
         self.overlay_panel.setStyleSheet("""
             QPushButton {
                 background-color: #1a1a1a;
@@ -354,17 +401,17 @@ class MainWindow(QMainWindow):
                 padding: 10px 15px;
                 font-weight: bold;
             }
-            QPushButton:hover { background-color: #333333; border: 1px solid #00f2ff; }
+            QPushButton:hover { 
+                background-color: #333333; 
+                border: 1px solid #00f2ff; 
+            }
+            /* Styling for active/checked state */
+            QPushButton:checked, QPushButton[active="true"] {
+                background-color: #00f2ff;
+                color: #1a1a1a;
+                border: 1px solid #00f2ff;
+            }
         """)
-        self.btn_pca = QPushButton("📉 HDE (PCA) layout")
-        self.btn_pca.clicked.connect(lambda: self.run_layout("pca"))
-        self.btn_spring = QPushButton("🕸 Spring layout")
-        self.btn_spring.clicked.connect(lambda: self.run_layout("spring"))
-        self.btn_lowcross = QPushButton("📐 Low-crossing")
-        self.btn_lowcross.clicked.connect(lambda: self.run_layout("lowcross"))
-        layout.addWidget(self.btn_pca)
-        layout.addWidget(self.btn_spring)
-        layout.addWidget(self.btn_lowcross)
         self.overlay_panel.show()
         self.overlay_panel.raise_()
 
@@ -377,32 +424,104 @@ class MainWindow(QMainWindow):
 
     def _setup_menu(self):
         menu_bar = self.menuBar()
+
+        # File Menu
         file_menu = menu_bar.addMenu("File")
         open_action = QAction("Open Graph...", self)
         open_action.setShortcut("Ctrl+O")
         open_action.triggered.connect(self.open_file)
         file_menu.addAction(open_action)
 
+        # Compute Menu
+        compute_menu = menu_bar.addMenu("Compute")
+
+        # Dominating set Sub-menu
+        dom_set_menu = compute_menu.addMenu("Dominating set")
+
+        # Algorithm 1 Action
+        algo1_action = QAction("ILP solution", self)
+        algo1_action.triggered.connect(self.run_dominating_set)
+        dom_set_menu.addAction(algo1_action)
+
     def open_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Open Graph", "", "Graph Files (*.col *.graphml *.gml)")
         if path:
             self.current_graph = load_from_col_file(path)
+
+            # Reset dominating set logic on new file load
+            self.dominating_set = []
+            self.show_dominating_set = False
+            self.btn_toggle_ds.setEnabled(False)
+            self.btn_toggle_ds.setChecked(False)
+
             self.run_layout("pca")
 
     def run_layout(self, mode):
         if not self.current_graph: return
+
+        # Update styling to highlight current layout
+        buttons = {
+            "pca": self.btn_pca,
+            "spring": self.btn_spring,
+            "lowcross": self.btn_lowcross
+        }
+        for key, btn in buttons.items():
+            btn.setProperty("active", key == mode)
+            # Re-evaluate stylesheet
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+
         msg = "Calculating graph layout. This may take a moment..."
         self.progress = QProgressDialog(msg, None, 0, 0, self)
         self.progress.setWindowModality(Qt.WindowModality.WindowModal)
         self.progress.setWindowTitle("Progress")
         self.progress.show()
+
         self.layout_thread = LayoutThread(self.current_graph, mode)
         self.layout_thread.layout_finished.connect(self.on_layout_finished)
         self.layout_thread.start()
 
     def on_layout_finished(self, pos):
         self.progress.accept()
-        self.canvas.display_graph(self.current_graph, pos)
+        self.current_pos = pos
+        self.redraw_graph()
+
+    def run_dominating_set(self):
+        if not self.current_graph:
+            return
+
+        msg = "Computing dominating set using ILP solution..."
+        self.ds_progress = QProgressDialog(msg, None, 0, 0, self)
+        self.ds_progress.setWindowModality(Qt.WindowModality.WindowModal)
+        self.ds_progress.setWindowTitle("Computing")
+        self.ds_progress.show()
+
+        self.ds_thread = DominatingSetThread(self.current_graph)
+        self.ds_thread.finished_computing.connect(self.on_dominating_set_finished)
+        self.ds_thread.start()
+
+    def on_dominating_set_finished(self, dom_set):
+        self.ds_progress.accept()
+
+        if dom_set:
+            self.dominating_set = dom_set
+
+            # Auto-enable and turn on highlighting
+            self.btn_toggle_ds.setEnabled(True)
+            self.btn_toggle_ds.setChecked(True)
+            self.show_dominating_set = True
+
+            self.redraw_graph()
+            print(f"Dominating set computation completed! Dominating set size: {len(self.dominating_set)}")
+
+    def toggle_dominating_set(self):
+        self.show_dominating_set = self.btn_toggle_ds.isChecked()
+        self.redraw_graph()
+
+    def redraw_graph(self):
+        """Redraws current pos using the current show_dominating_set state."""
+        highlight = self.dominating_set if self.show_dominating_set else None
+        self.canvas.display_graph(self.current_graph, self.current_pos, highlight_nodes=highlight)
 
 
 if __name__ == "__main__":
