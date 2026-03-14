@@ -15,7 +15,7 @@ from scipy import sparse
 from scipy.sparse.linalg import spsolve
 
 from analyze_graph.dominating_set import minimum_dominating_set_ilp
-
+from analyze_graph.max_clique import get_large_clique
 
 class DominatingSetThread(QThread):
     finished_computing = pyqtSignal(list)
@@ -34,9 +34,6 @@ class DominatingSetThread(QThread):
         self.finished_computing.emit(dom_set if dom_set is not None else [])
 
     def compute_algorithm_ilp(self, G):
-        """
-        Placeholder function for your Dominating Set Algorithm 1.
-        """
         print("Computing minimum dominating set of the graph...")
 
         mds = minimum_dominating_set_ilp(G, timeLimit=120)
@@ -44,6 +41,34 @@ class DominatingSetThread(QThread):
         if mds is not None:
             print(f"Found a dominating set of size {len(mds)}.")
             return mds
+        else:
+            print(f"No feasible solution found.")
+            return None
+
+class CliqueThread(QThread):
+    finished_computing = pyqtSignal(list)
+
+    def __init__(self, G):
+        super().__init__()
+        self.G = G
+
+    def run(self):
+        if not self.G or not self.G.nodes:
+            self.finished_computing.emit([])
+            return
+
+        # Trigger the algorithm
+        clique = self.compute_algorithm_hald(self.G)
+        self.finished_computing.emit(clique if clique is not None else [])
+
+    def compute_algorithm_hald(self, G):
+        print("Computing a large clique in the graph...")
+
+        clique = get_large_clique(G)
+
+        if clique is not None:
+            print(f"Found a clique of size {len(clique)}.")
+            return clique
         else:
             print(f"No feasible solution found.")
             return None
@@ -437,11 +462,17 @@ class MainWindow(QMainWindow):
 
         # Dominating set Sub-menu
         dom_set_menu = compute_menu.addMenu("Dominating set")
-
-        # Algorithm 1 Action
+        # Algorithms
         algo1_action = QAction("ILP solution", self)
         algo1_action.triggered.connect(self.run_dominating_set)
         dom_set_menu.addAction(algo1_action)
+
+        # clique sub-menu
+        clique_menu = compute_menu.addMenu("Maximum clique")
+        # Algorithms
+        algo_cl1_action = QAction("Boppana-Halldórsson heuristic", self)
+        algo_cl1_action.triggered.connect(self.run_clique)
+        clique_menu.addAction(algo_cl1_action)
 
     def open_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Open Graph", "", "Graph Files (*.col *.graphml *.gml)")
@@ -500,6 +531,20 @@ class MainWindow(QMainWindow):
         self.ds_thread.finished_computing.connect(self.on_dominating_set_finished)
         self.ds_thread.start()
 
+    def run_clique(self):
+        if not self.current_graph:
+            return
+
+        msg = "Computing a large clique using Boppana-Halldórsson heuristic..."
+        self.cl_progress = QProgressDialog(msg, None, 0, 0, self)
+        self.cl_progress.setWindowModality(Qt.WindowModality.WindowModal)
+        self.cl_progress.setWindowTitle("Computing")
+        self.cl_progress.show()
+
+        self.cl_thread = CliqueThread(self.current_graph)
+        self.cl_thread.finished_computing.connect(self.on_clique_finished)
+        self.cl_thread.start()
+
     def on_dominating_set_finished(self, dom_set):
         self.ds_progress.accept()
 
@@ -513,6 +558,20 @@ class MainWindow(QMainWindow):
 
             self.redraw_graph()
             print(f"Dominating set computation completed! Dominating set size: {len(self.dominating_set)}")
+
+    def on_clique_finished(self, clique):
+        self.cl_progress.accept()
+
+        if clique:
+            self.clique = clique
+
+            # Auto-enable and turn on highlighting
+            # self.btn_toggle_cl.setEnabled(True)
+            # self.btn_toggle_cl.setChecked(True)
+            # self.show_clique = True
+
+            self.redraw_graph()
+            print(f"Large clique computation completed! Clique size: {len(self.clique)}")
 
     def toggle_dominating_set(self):
         self.show_dominating_set = self.btn_toggle_ds.isChecked()
