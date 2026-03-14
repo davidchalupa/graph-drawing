@@ -10,12 +10,12 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QPen, QBrush, QPainter, QAction
 import math
 import random
-import time
 from scipy import sparse
 from scipy.sparse.linalg import spsolve
 
 from analyze_graph.dominating_set import minimum_dominating_set_ilp
 from analyze_graph.max_clique import get_large_clique
+
 
 class DominatingSetThread(QThread):
     finished_computing = pyqtSignal(list)
@@ -44,6 +44,7 @@ class DominatingSetThread(QThread):
         else:
             print(f"No feasible solution found.")
             return None
+
 
 class CliqueThread(QThread):
     finished_computing = pyqtSignal(list)
@@ -89,20 +90,32 @@ class LayoutThread(QThread):
 
         if self.mode == "pca":
             pos = self.compute_hde_layout(self.G)
-            for node in pos:
-                pos[node][0] *= 150
-                pos[node][1] *= 150
         elif self.mode == "lowcross":
             pos = self.low_crossing_layout_auto(self.G)
-            for node in pos:
-                pos[node][0] *= 2000
-                pos[node][1] *= 2000
         else:
             pos = nx.spring_layout(self.G, scale=1000)
 
-        # Apply landscape stretch (16:9)
+        # Jitter/De-collision pass
+        # If two nodes are at the exact same spot, give them a tiny random offset
+        seen_positions = {}
+        jitter_amount = 0.1  # Small enough not to ruin the layout, big enough to see
+
         for node in pos:
-            pos[node][0] *= 1.77
+            # Create a tuple key for the position to check for exact overlaps
+            p_tuple = (round(pos[node][0], 6), round(pos[node][1], 6))
+
+            if p_tuple in seen_positions:
+                # Nudge the node slightly
+                pos[node][0] += random.uniform(-jitter_amount, jitter_amount)
+                pos[node][1] += random.uniform(-jitter_amount, jitter_amount)
+            else:
+                seen_positions[p_tuple] = node
+
+        # Apply the final scaling and landscape stretch
+        scale_val = 150 if self.mode == "pca" else (2000 if self.mode == "lowcross" else 1.0)
+        for node in pos:
+            pos[node][0] *= (scale_val * 1.77)
+            pos[node][1] *= scale_val
 
         self.layout_finished.emit(pos)
 
@@ -308,35 +321,65 @@ class GraphCanvas(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
 
-    def display_graph(self, G, pos, highlight_nodes=None):
+    def display_graph(self, G, pos, dom_nodes=None, clique_nodes=None):
         self.scene.clear()
         if not G or not pos:
             return
 
-        if highlight_nodes is None:
-            highlight_nodes = []
-        highlight_set = set(highlight_nodes)
+        dom_set = set(dom_nodes) if dom_nodes else set()
+        clique_set = set(clique_nodes) if clique_nodes else set()
 
-        edge_pen = QPen(QColor(80, 80, 80, 100), 1)
-        for u, v in G.edges():
-            if u in pos and v in pos:
-                self.scene.addLine(pos[u][0], pos[u][1], pos[v][0], pos[v][1], edge_pen)
+        # Pens and Brushes
+        default_edge_pen = QPen(QColor(80, 80, 80, 100), 1)
+        clique_edge_pen = QPen(QColor("#00FF00"), 2)  # Vibrant Green for clique edges
 
-        normal_brush = QBrush(QColor("#00f2ff"))
-        highlight_brush = QBrush(QColor("#FF8C00"))  # Bright orange for highlighting
+        normal_brush = QBrush(QColor("#00f2ff"))  # Cyan
+        dom_brush = QBrush(QColor("#FF8C00"))  # Orange
+        clique_brush = QBrush(QColor("#00FF00"))  # Green
+        both_brush = QBrush(QColor("#FFFFFF"))  # White if in both
         node_pen = QPen(Qt.GlobalColor.black, 1)
 
+        # 1. Draw Edges
+        for u, v in G.edges():
+            if u in pos and v in pos:
+                # Highlight edge if BOTH endpoints are in the clique
+                if u in clique_set and v in clique_set:
+                    pen = clique_edge_pen
+                    z_val = 1
+                else:
+                    pen = default_edge_pen
+                    z_val = 0
+
+                line = self.scene.addLine(pos[u][0], pos[u][1], pos[v][0], pos[v][1], pen)
+                line.setZValue(z_val)
+
+        # 2. Draw Nodes
         for node in G.nodes():
             if node in pos:
                 x, y = pos[node]
-                is_highlighted = node in highlight_set
 
-                brush = highlight_brush if is_highlighted else normal_brush
-                radius = 7 if is_highlighted else 5
+                is_dom = node in dom_set
+                is_clique = node in clique_set
+
+                # Determine color logic
+                if is_dom and is_clique:
+                    brush = both_brush
+                    radius = 8
+                elif is_clique:
+                    brush = clique_brush
+                    radius = 8
+                elif is_dom:
+                    brush = dom_brush
+                    radius = 7
+                else:
+                    brush = normal_brush
+                    radius = 5
+
                 diameter = radius * 2
-
                 ellipse = self.scene.addEllipse(x - radius, y - radius, diameter, diameter, node_pen, brush)
-                ellipse.setZValue(2 if is_highlighted else 1)
+
+                # Ensure highlighted nodes stay on top
+                ellipse.setZValue(3 if (is_dom or is_clique) else 2)
 
         rect = self.scene.itemsBoundingRect()
         margin = 50
@@ -377,6 +420,10 @@ class MainWindow(QMainWindow):
         self.dominating_set = []
         self.show_dominating_set = False
 
+        # New properties for the clique
+        self.clique = []
+        self.show_clique = False
+
         self.canvas = GraphCanvas()
         self.setCentralWidget(self.canvas)
         self._setup_overlay_buttons()
@@ -395,8 +442,15 @@ class MainWindow(QMainWindow):
         self.btn_toggle_ds.setEnabled(False)  # Disabled until computed
         self.btn_toggle_ds.clicked.connect(self.toggle_dominating_set)
 
+        # New Toggle Button for Clique
+        self.btn_toggle_cl = QPushButton("⭐ Show Clique")
+        self.btn_toggle_cl.setCheckable(True)
+        self.btn_toggle_cl.setEnabled(False)  # Disabled until computed
+        self.btn_toggle_cl.clicked.connect(self.toggle_clique)
+
         h_toggle_layout = QHBoxLayout()
         h_toggle_layout.addWidget(self.btn_toggle_ds)
+        h_toggle_layout.addWidget(self.btn_toggle_cl)  # Added right next to DS button
         h_toggle_layout.addStretch()
         v_layout.addLayout(h_toggle_layout)
 
@@ -485,6 +539,12 @@ class MainWindow(QMainWindow):
             self.btn_toggle_ds.setEnabled(False)
             self.btn_toggle_ds.setChecked(False)
 
+            # Reset clique logic on new file load
+            self.clique = []
+            self.show_clique = False
+            self.btn_toggle_cl.setEnabled(False)
+            self.btn_toggle_cl.setChecked(False)
+
             self.run_layout("pca")
 
     def run_layout(self, mode):
@@ -566,9 +626,9 @@ class MainWindow(QMainWindow):
             self.clique = clique
 
             # Auto-enable and turn on highlighting
-            # self.btn_toggle_cl.setEnabled(True)
-            # self.btn_toggle_cl.setChecked(True)
-            # self.show_clique = True
+            self.btn_toggle_cl.setEnabled(True)
+            self.btn_toggle_cl.setChecked(True)
+            self.show_clique = True
 
             self.redraw_graph()
             print(f"Large clique computation completed! Clique size: {len(self.clique)}")
@@ -577,10 +637,21 @@ class MainWindow(QMainWindow):
         self.show_dominating_set = self.btn_toggle_ds.isChecked()
         self.redraw_graph()
 
+    def toggle_clique(self):
+        self.show_clique = self.btn_toggle_cl.isChecked()
+        self.redraw_graph()
+
     def redraw_graph(self):
-        """Redraws current pos using the current show_dominating_set state."""
-        highlight = self.dominating_set if self.show_dominating_set else None
-        self.canvas.display_graph(self.current_graph, self.current_pos, highlight_nodes=highlight)
+        """Redraws the graph using separate sets for different highlight colors."""
+        dom_to_show = self.dominating_set if self.show_dominating_set else None
+        clique_to_show = self.clique if self.show_clique else None
+
+        self.canvas.display_graph(
+            self.current_graph,
+            self.current_pos,
+            dom_nodes=dom_to_show,
+            clique_nodes=clique_to_show
+        )
 
 
 if __name__ == "__main__":
