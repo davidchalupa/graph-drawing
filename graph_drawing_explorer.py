@@ -14,7 +14,9 @@ from scipy import sparse
 from scipy.sparse.linalg import spsolve
 
 from analyze_graph.dominating_set import minimum_dominating_set_ilp
-from analyze_graph.max_clique import get_large_clique
+from analyze_graph.max_clique import get_large_clique_greedy
+from analyze_graph.max_clique import get_large_clique_bopp_hald
+from analyze_graph.max_clique import get_max_clique_bnb
 
 
 class DominatingSetThread(QThread):
@@ -49,9 +51,10 @@ class DominatingSetThread(QThread):
 class CliqueThread(QThread):
     finished_computing = pyqtSignal(list)
 
-    def __init__(self, G):
+    def __init__(self, G, alg):
         super().__init__()
         self.G = G
+        self.alg = alg
 
     def run(self):
         if not self.G or not self.G.nodes:
@@ -59,13 +62,44 @@ class CliqueThread(QThread):
             return
 
         # Trigger the algorithm
-        clique = self.compute_algorithm_hald(self.G)
+        if self.alg == "bopp_hald":
+            clique = self.compute_algorithm_hald(self.G)
+        elif self.alg == "greedy":
+            clique = self.compute_algorithm_greedy(self.G)
+        elif self.alg == "exact":
+            clique = self.compute_algorithm_exact(self.G)
+        else:
+            raise ValueError("Invalid clique algorithm")
         self.finished_computing.emit(clique if clique is not None else [])
 
     def compute_algorithm_hald(self, G):
         print("Computing a large clique in the graph...")
 
-        clique = get_large_clique(G)
+        clique = get_large_clique_bopp_hald(G)
+
+        if clique is not None:
+            print(f"Found a clique of size {len(clique)}.")
+            return clique
+        else:
+            print(f"No feasible solution found.")
+            return None
+
+    def compute_algorithm_greedy(self, G):
+        print("Computing a large clique in the graph...")
+
+        clique = get_large_clique_greedy(G)
+
+        if clique is not None:
+            print(f"Found a clique of size {len(clique)}.")
+            return clique
+        else:
+            print(f"No feasible solution found.")
+            return None
+
+    def compute_algorithm_exact(self, G):
+        print("Computing the maximum clique in the graph...")
+
+        clique = get_max_clique_bnb(G)
 
         if clique is not None:
             print(f"Found a clique of size {len(clique)}.")
@@ -524,9 +558,15 @@ class MainWindow(QMainWindow):
         # clique sub-menu
         clique_menu = compute_menu.addMenu("Maximum clique")
         # Algorithms
-        algo_cl1_action = QAction("Boppana-Halldórsson heuristic", self)
-        algo_cl1_action.triggered.connect(self.run_clique)
+        algo_cl1_action = QAction("Greedy heuristic", self)
+        algo_cl1_action.triggered.connect(self.run_clique_greedy)
+        algo_cl2_action = QAction("Boppana-Halldórsson heuristic", self)
+        algo_cl2_action.triggered.connect(self.run_clique_bopp_hald)
+        algo_cl3_action = QAction("Branch and bound", self)
+        algo_cl3_action.triggered.connect(self.run_clique_exact)
         clique_menu.addAction(algo_cl1_action)
+        clique_menu.addAction(algo_cl2_action)
+        clique_menu.addAction(algo_cl3_action)
 
     def open_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Open Graph", "", "Graph Files (*.col *.graphml *.gml)")
@@ -591,7 +631,7 @@ class MainWindow(QMainWindow):
         self.ds_thread.finished_computing.connect(self.on_dominating_set_finished)
         self.ds_thread.start()
 
-    def run_clique(self):
+    def run_clique_bopp_hald(self):
         if not self.current_graph:
             return
 
@@ -601,7 +641,35 @@ class MainWindow(QMainWindow):
         self.cl_progress.setWindowTitle("Computing")
         self.cl_progress.show()
 
-        self.cl_thread = CliqueThread(self.current_graph)
+        self.cl_thread = CliqueThread(self.current_graph, "bopp_hald")
+        self.cl_thread.finished_computing.connect(self.on_clique_finished)
+        self.cl_thread.start()
+
+    def run_clique_greedy(self):
+        if not self.current_graph:
+            return
+
+        msg = "Computing a large clique using greedy heuristic..."
+        self.cl_progress = QProgressDialog(msg, None, 0, 0, self)
+        self.cl_progress.setWindowModality(Qt.WindowModality.WindowModal)
+        self.cl_progress.setWindowTitle("Computing")
+        self.cl_progress.show()
+
+        self.cl_thread = CliqueThread(self.current_graph, "greedy")
+        self.cl_thread.finished_computing.connect(self.on_clique_finished)
+        self.cl_thread.start()
+
+    def run_clique_exact(self):
+        if not self.current_graph:
+            return
+
+        msg = "Computing a large clique using an exact algorithm..."
+        self.cl_progress = QProgressDialog(msg, None, 0, 0, self)
+        self.cl_progress.setWindowModality(Qt.WindowModality.WindowModal)
+        self.cl_progress.setWindowTitle("Computing")
+        self.cl_progress.show()
+
+        self.cl_thread = CliqueThread(self.current_graph, "exact")
         self.cl_thread.finished_computing.connect(self.on_clique_finished)
         self.cl_thread.start()
 
