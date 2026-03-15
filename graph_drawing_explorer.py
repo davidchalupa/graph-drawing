@@ -117,6 +117,8 @@ class LayoutThread(QThread):
             pos = self.compute_hde_layout(self.G)
         elif self.mode == "lowcross":
             pos = self.low_crossing_layout_auto(self.G)
+        elif self.mode == "radial":
+            pos = self.compute_radial_layout(self.G)
         else:
             pos = nx.spring_layout(self.G, scale=1000)
 
@@ -156,6 +158,52 @@ class LayoutThread(QThread):
         pca = PCA(n_components=2)
         coords = pca.fit_transform(dist_matrix)
         return {nodes[i]: coords[i] for i in range(len(nodes))}
+
+    def compute_radial_layout(self, G):
+        if not G or not G.nodes:
+            return {}
+
+        # 1. Find the central vertex (highest degree)
+        root = max(G.nodes(), key=G.degree)
+
+        # 2. Get shortest path distances from that root
+        # This defines which "ring" a node belongs to
+        lengths = nx.single_source_shortest_path_length(G, root)
+
+        # Group nodes by their distance (level)
+        levels = {}
+        for node, dist in lengths.items():
+            levels.setdefault(dist, []).append(node)
+
+        pos = {}
+        # We'll use 1000 as the max radius to match your spring_layout scale
+        max_dist = max(levels.keys()) if levels else 1
+        radius_step = 1000.0 / max_dist if max_dist > 0 else 1000.0
+
+        for dist, nodes_in_level in levels.items():
+            radius = dist * radius_step
+            count = len(nodes_in_level)
+
+            for i, node in enumerate(nodes_in_level):
+                # Evenly space nodes around the circle for this specific level
+                angle = (2 * math.pi * i) / count
+                x = radius * math.cos(angle)
+                y = radius * math.sin(angle)
+                pos[node] = np.array([x, y], dtype=float)
+
+        # 3. Handle disconnected components (nodes unreachable from the root)
+        unplaced = set(G.nodes()) - set(pos.keys())
+        if unplaced:
+            outer_radius = (max_dist + 1) * radius_step
+            unplaced_list = list(unplaced)
+            count = len(unplaced_list)
+            for i, node in enumerate(unplaced_list):
+                angle = (2 * math.pi * i) / count
+                x = outer_radius * math.cos(angle)
+                y = outer_radius * math.sin(angle)
+                pos[node] = np.array([x, y], dtype=float)
+
+        return pos
 
     def low_crossing_layout_auto(self, G, prefer_edge_order='degprod', refine_iterations=60, coarse_random_seed=None):
         if coarse_random_seed is not None:
@@ -301,6 +349,7 @@ class LayoutThread(QThread):
 
         return out
 
+
 class FastLineItem(QGraphicsItem):
     def __init__(self, lines, pen, bounding_rect, z_value=0):
         super().__init__()
@@ -384,6 +433,12 @@ class GraphCanvasOptimized(QGraphicsView):
         self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.SmartViewportUpdate)
         self.setOptimizationFlag(QGraphicsView.OptimizationFlag.DontSavePainterState)
         self.setOptimizationFlag(QGraphicsView.OptimizationFlag.DontAdjustForAntialiasing)
+
+        # Disable the BSP tree search entirely if you use large custom items
+        self.scene.setItemIndexMethod(QGraphicsScene.ItemIndexMethod.NoIndex)
+
+        # This tells Qt: "I promise I won't change these items, just draw them."
+        self.setOptimizationFlag(QGraphicsView.OptimizationFlag.DontSavePainterState)
 
     def mousePressEvent(self, event):
         self.is_interacting = True
@@ -553,6 +608,7 @@ class GraphCanvas(QGraphicsView):
         zoom_factor = 1.25 if event.angleDelta().y() > 0 else 0.8
         self.scale(zoom_factor, zoom_factor)
 
+
 def load_from_col_file(file_path):
     G = nx.Graph()
     try:
@@ -585,15 +641,23 @@ class MainWindow(QMainWindow):
         self.clique = []
         self.show_clique = False
 
-        optimized_rendering = False
-        if optimized_rendering:
-            self.canvas = GraphCanvasOptimized()
-        else:
-            self.canvas = GraphCanvas()
+        # Start with the standard canvas, we'll swap it when opening a file if needed
+        self.canvas = GraphCanvas()
         self.setCentralWidget(self.canvas)
         self._setup_overlay_buttons()
         self._setup_menu()
         self.showMaximized()
+
+    def switch_canvas(self, optimized: bool):
+        """Swaps the central canvas depending on the graph size."""
+        if optimized:
+            self.canvas = GraphCanvasOptimized()
+        else:
+            self.canvas = GraphCanvas()
+        self.setCentralWidget(self.canvas)
+        # Re-raise the overlay so it doesn't get hidden behind the new canvas
+        if hasattr(self, 'overlay_panel'):
+            self.overlay_panel.raise_()
 
     def _setup_overlay_buttons(self):
         self.overlay_panel = QWidget(self)
@@ -601,12 +665,14 @@ class MainWindow(QMainWindow):
         v_layout.setContentsMargins(0, 0, 0, 0)
         v_layout.setSpacing(10)
 
-        self.btn_toggle_ds = QPushButton("👁 Show Dominating Set")
+        self.btn_toggle_ds = QPushButton("👁")
+        self.btn_toggle_ds.setToolTip("Show Dominating Set")
         self.btn_toggle_ds.setCheckable(True)
         self.btn_toggle_ds.setEnabled(False)
         self.btn_toggle_ds.clicked.connect(self.toggle_dominating_set)
 
-        self.btn_toggle_cl = QPushButton("⭐ Show Clique")
+        self.btn_toggle_cl = QPushButton("⭐")
+        self.btn_toggle_cl.setToolTip("Show Clique")
         self.btn_toggle_cl.setCheckable(True)
         self.btn_toggle_cl.setEnabled(False)
         self.btn_toggle_cl.clicked.connect(self.toggle_clique)
@@ -617,16 +683,24 @@ class MainWindow(QMainWindow):
         h_toggle_layout.addStretch()
         v_layout.addLayout(h_toggle_layout)
 
-        self.btn_pca = QPushButton("📉 HDE (PCA) layout")
+        self.btn_radial = QPushButton("🌀")
+        self.btn_radial.setToolTip("Radial layout")
+        self.btn_radial.clicked.connect(lambda: self.run_layout("radial"))
+
+        self.btn_pca = QPushButton("📉")
+        self.btn_pca.setToolTip("HDE (PCA) layout")
         self.btn_pca.clicked.connect(lambda: self.run_layout("pca"))
 
-        self.btn_spring = QPushButton("🕸 Spring layout")
+        self.btn_spring = QPushButton("🕸")
+        self.btn_spring.setToolTip("Spring layout")
         self.btn_spring.clicked.connect(lambda: self.run_layout("spring"))
 
-        self.btn_lowcross = QPushButton("📐 Low-crossing")
+        self.btn_lowcross = QPushButton("📐")
+        self.btn_lowcross.setToolTip("Low-crossing layout")
         self.btn_lowcross.clicked.connect(lambda: self.run_layout("lowcross"))
 
         h_layout_btns = QHBoxLayout()
+        h_layout_btns.addWidget(self.btn_radial)
         h_layout_btns.addWidget(self.btn_pca)
         h_layout_btns.addWidget(self.btn_spring)
         h_layout_btns.addWidget(self.btn_lowcross)
@@ -641,10 +715,16 @@ class MainWindow(QMainWindow):
                 border-radius: 4px;
                 padding: 10px 15px;
                 font-weight: bold;
+                font-size: 16px;
             }
             QPushButton:hover { 
                 background-color: #333333; 
                 border: 1px solid #00f2ff; 
+            }
+            QPushButton:disabled {
+                color: #555555;
+                border: 1px solid #333333;
+                background-color: #111111;
             }
             QPushButton:checked, QPushButton[active="true"] {
                 background-color: #00f2ff;
@@ -702,12 +782,34 @@ class MainWindow(QMainWindow):
             self.btn_toggle_cl.setEnabled(False)
             self.btn_toggle_cl.setChecked(False)
 
-            self.run_layout("pca")
+            num_nodes = self.current_graph.number_of_nodes()
+            num_edges = self.current_graph.number_of_edges()
+
+            # Switch to Optimized canvas if the graph is huge
+            if num_nodes > 4000 or num_edges > 10000:
+                self.switch_canvas(optimized=True)
+            else:
+                self.switch_canvas(optimized=False)
+
+            # Disable expensive layout options if the graph size threatens to freeze the app
+            if num_nodes > 2500 or num_edges > 10000:
+                self.btn_spring.setEnabled(False)
+                self.btn_spring.setToolTip("Spring layout disabled (Graph too large)")
+                self.btn_lowcross.setEnabled(False)
+                self.btn_lowcross.setToolTip("Low-crossing layout disabled (Graph too large)")
+            else:
+                self.btn_spring.setEnabled(True)
+                self.btn_spring.setToolTip("Spring layout")
+                self.btn_lowcross.setEnabled(True)
+                self.btn_lowcross.setToolTip("Low-crossing layout")
+
+            self.run_layout("radial")
 
     def run_layout(self, mode):
         if not self.current_graph: return
 
-        buttons = {"pca": self.btn_pca, "spring": self.btn_spring, "lowcross": self.btn_lowcross}
+        buttons = {"pca": self.btn_pca, "spring": self.btn_spring, "lowcross": self.btn_lowcross,
+                   "radial": self.btn_radial}
         for key, btn in buttons.items():
             btn.setProperty("active", key == mode)
             btn.style().unpolish(btn)
