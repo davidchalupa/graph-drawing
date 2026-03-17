@@ -795,11 +795,14 @@ class MainWindow(QMainWindow):
             if num_nodes > 2500 or num_edges > 10000:
                 self.btn_spring.setEnabled(False)
                 self.btn_spring.setToolTip("Spring layout disabled (Graph too large)")
-                self.btn_lowcross.setEnabled(False)
-                self.btn_lowcross.setToolTip("Low-crossing layout disabled (Graph too large)")
             else:
                 self.btn_spring.setEnabled(True)
                 self.btn_spring.setToolTip("Spring layout")
+
+            if num_nodes > 1250 or num_edges > 5000:
+                self.btn_lowcross.setEnabled(False)
+                self.btn_lowcross.setToolTip("Low-crossing layout disabled (Graph too large)")
+            else:
                 self.btn_lowcross.setEnabled(True)
                 self.btn_lowcross.setToolTip("Low-crossing layout")
 
