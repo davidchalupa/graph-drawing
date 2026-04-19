@@ -7,10 +7,11 @@ from sklearn.decomposition import PCA
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QGraphicsView, QGraphicsScene,
     QFileDialog, QProgressDialog, QPushButton, QHBoxLayout, QVBoxLayout, QWidget,
-    QGraphicsItem, QGraphicsPathItem
+    QGraphicsItem, QGraphicsPathItem, QStackedWidget, QDialog, QFormLayout,
+    QSpinBox, QDialogButtonBox, QMessageBox, QGridLayout
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QLineF, QRectF
-from PyQt6.QtGui import QColor, QPen, QBrush, QPainter, QAction, QPainterPath
+from PyQt6.QtGui import QColor, QPen, QBrush, QPainter, QAction, QPainterPath, QImage, QPixmap
 # -----------------------
 
 import math
@@ -163,20 +164,14 @@ class LayoutThread(QThread):
         if not G or not G.nodes:
             return {}
 
-        # 1. Find the central vertex (highest degree)
         root = max(G.nodes(), key=G.degree)
-
-        # 2. Get shortest path distances from that root
-        # This defines which "ring" a node belongs to
         lengths = nx.single_source_shortest_path_length(G, root)
 
-        # Group nodes by their distance (level)
         levels = {}
         for node, dist in lengths.items():
             levels.setdefault(dist, []).append(node)
 
         pos = {}
-        # We'll use 1000 as the max radius to match your spring_layout scale
         max_dist = max(levels.keys()) if levels else 1
         radius_step = 1000.0 / max_dist if max_dist > 0 else 1000.0
 
@@ -185,13 +180,11 @@ class LayoutThread(QThread):
             count = len(nodes_in_level)
 
             for i, node in enumerate(nodes_in_level):
-                # Evenly space nodes around the circle for this specific level
                 angle = (2 * math.pi * i) / count
                 x = radius * math.cos(angle)
                 y = radius * math.sin(angle)
                 pos[node] = np.array([x, y], dtype=float)
 
-        # 3. Handle disconnected components (nodes unreachable from the root)
         unplaced = set(G.nodes()) - set(pos.keys())
         if unplaced:
             outer_radius = (max_dist + 1) * radius_step
@@ -362,16 +355,12 @@ class FastLineItem(QGraphicsItem):
         return self._boundingRect
 
     def paint(self, painter, option, widget):
-        # Access the view from the widget
         view = widget.parent()
         if isinstance(view, GraphCanvasOptimized) and view.is_interacting and self.zValue() == 0:
-            return  # Don't draw background lines during movement
-
-        # Level of Detail (LOD): If zoomed way out, don't draw standard edges at all to save CPU
+            return
         lod = option.levelOfDetailFromTransform(painter.worldTransform())
         if lod < 0.15 and self.zValue() == 0:
-            return  # Skip background edges when far away
-
+            return
         painter.setPen(self._pen)
         painter.drawLines(self.lines)
 
@@ -379,7 +368,7 @@ class FastLineItem(QGraphicsItem):
 class FastNodeItem(QGraphicsItem):
     def __init__(self, points, color, radius, bounding_rect, z_value=0, is_highlight=False):
         super().__init__()
-        self.points = points  # List of QPointF
+        self.points = points
         self.color = QColor(color)
         self.radius = radius
         self._boundingRect = bounding_rect
@@ -391,16 +380,12 @@ class FastNodeItem(QGraphicsItem):
 
     def paint(self, painter, option, widget):
         lod = option.levelOfDetailFromTransform(painter.worldTransform())
-
-        # When zoomed out, or for standard nodes, use blisteringly fast Point drawing
         if lod < 0.5 and not self.is_highlight:
-            # A thick pen with a round cap acts like a perfect circle but renders instantly
             pen = QPen(self.color, self.radius * 2)
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             painter.setPen(pen)
             painter.drawPoints(self.points)
         else:
-            # Draw actual ellipses with borders only when zoomed in or highlighted
             painter.setPen(QPen(Qt.GlobalColor.black, 0))
             painter.setBrush(QBrush(self.color))
             r = self.radius
@@ -415,18 +400,12 @@ class GraphCanvasOptimized(QGraphicsView):
         self.scene = QGraphicsScene(self)
         self.setScene(self.scene)
 
-        # --- THE MAGIC SWITCH: GPU ACCELERATION ---
         self.gl_widget = QOpenGLWidget()
         self.setViewport(self.gl_widget)
-        # ------------------------------------------
 
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setBackgroundBrush(QColor("#0d0d0d"))
-
-        # --- CRITICAL PERFORMANCE SWITCHES ---
-        # Turn OFF Antialiasing. It forces sub-pixel calculations on 50k+ overlapping items.
         self.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
 
@@ -434,20 +413,17 @@ class GraphCanvasOptimized(QGraphicsView):
         self.setOptimizationFlag(QGraphicsView.OptimizationFlag.DontSavePainterState)
         self.setOptimizationFlag(QGraphicsView.OptimizationFlag.DontAdjustForAntialiasing)
 
-        # Disable the BSP tree search entirely if you use large custom items
         self.scene.setItemIndexMethod(QGraphicsScene.ItemIndexMethod.NoIndex)
-
-        # This tells Qt: "I promise I won't change these items, just draw them."
         self.setOptimizationFlag(QGraphicsView.OptimizationFlag.DontSavePainterState)
 
     def mousePressEvent(self, event):
         self.is_interacting = True
-        self.viewport().update()  # Trigger a redraw in "Draft Mode"
+        self.viewport().update()
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):
         self.is_interacting = False
-        self.viewport().update()  # Trigger a redraw in "High Detail"
+        self.viewport().update()
         super().mouseReleaseEvent(event)
 
     def display_graph(self, G, pos, dom_nodes=None, clique_nodes=None):
@@ -458,7 +434,7 @@ class GraphCanvasOptimized(QGraphicsView):
         dom_set = set(dom_nodes) if dom_nodes else set()
         clique_set = set(clique_nodes) if clique_nodes else set()
 
-        default_edge_pen = QPen(QColor(80, 80, 80, 100), 0)  # 0 = cosmetic pen (always 1px)
+        default_edge_pen = QPen(QColor(80, 80, 80, 100), 0)
         clique_edge_pen = QPen(QColor("#00FF00"), 2)
         clique_edge_pen.setCosmetic(True)
 
@@ -470,7 +446,6 @@ class GraphCanvasOptimized(QGraphicsView):
         else:
             scene_rect = QRectF(0, 0, 100, 100)
 
-        # 1. BATCH EDGES
         default_lines = []
         clique_lines = []
 
@@ -489,7 +464,6 @@ class GraphCanvasOptimized(QGraphicsView):
         if clique_lines:
             self.scene.addItem(FastLineItem(clique_lines, clique_edge_pen, scene_rect, z_value=1))
 
-        # 2. BATCH NODES INTO POINTS
         pts_normal, pts_dom, pts_clique, pts_both = [], [], [], []
 
         for node in G.nodes():
@@ -508,7 +482,6 @@ class GraphCanvasOptimized(QGraphicsView):
                 else:
                     pts_normal.append(qpf)
 
-        # Draw using our new high-speed point renderer
         if pts_normal:
             self.scene.addItem(FastNodeItem(pts_normal, "#00f2ff", 5, scene_rect, z_value=2))
         if pts_dom:
@@ -547,20 +520,17 @@ class GraphCanvas(QGraphicsView):
         dom_set = set(dom_nodes) if dom_nodes else set()
         clique_set = set(clique_nodes) if clique_nodes else set()
 
-        # Pens and Brushes
         default_edge_pen = QPen(QColor(80, 80, 80, 100), 1)
-        clique_edge_pen = QPen(QColor("#00FF00"), 2)  # Vibrant Green for clique edges
+        clique_edge_pen = QPen(QColor("#00FF00"), 2)
 
-        normal_brush = QBrush(QColor("#00f2ff"))  # Cyan
-        dom_brush = QBrush(QColor("#FF8C00"))  # Orange
-        clique_brush = QBrush(QColor("#00FF00"))  # Green
-        both_brush = QBrush(QColor("#FFFFFF"))  # White if in both
+        normal_brush = QBrush(QColor("#00f2ff"))
+        dom_brush = QBrush(QColor("#FF8C00"))
+        clique_brush = QBrush(QColor("#00FF00"))
+        both_brush = QBrush(QColor("#FFFFFF"))
         node_pen = QPen(Qt.GlobalColor.black, 1)
 
-        # 1. Draw Edges
         for u, v in G.edges():
             if u in pos and v in pos:
-                # Highlight edge if BOTH endpoints are in the clique
                 if u in clique_set and v in clique_set:
                     pen = clique_edge_pen
                     z_val = 1
@@ -571,15 +541,12 @@ class GraphCanvas(QGraphicsView):
                 line = self.scene.addLine(pos[u][0], pos[u][1], pos[v][0], pos[v][1], pen)
                 line.setZValue(z_val)
 
-        # 2. Draw Nodes
         for node in G.nodes():
             if node in pos:
                 x, y = pos[node]
-
                 is_dom = node in dom_set
                 is_clique = node in clique_set
 
-                # Determine color logic
                 if is_dom and is_clique:
                     brush = both_brush
                     radius = 8
@@ -595,8 +562,6 @@ class GraphCanvas(QGraphicsView):
 
                 diameter = radius * 2
                 ellipse = self.scene.addEllipse(x - radius, y - radius, diameter, diameter, node_pen, brush)
-
-                # Ensure highlighted nodes stay on top
                 ellipse.setZValue(3 if (is_dom or is_clique) else 2)
 
         rect = self.scene.itemsBoundingRect()
@@ -641,30 +606,51 @@ class MainWindow(QMainWindow):
         self.clique = []
         self.show_clique = False
 
-        # Start with the standard canvas, we'll swap it when opening a file if needed
-        self.canvas = GraphCanvas()
-        self.setCentralWidget(self.canvas)
+        self.stacked_widget = QStackedWidget()
+        self.canvas_standard = GraphCanvas()
+        self.canvas_optimized = GraphCanvasOptimized()
+        self.stacked_widget.addWidget(self.canvas_standard)
+        self.stacked_widget.addWidget(self.canvas_optimized)
+        self.setCentralWidget(self.stacked_widget)
+        self.canvas = self.canvas_standard
+
         self._setup_overlay_buttons()
         self._setup_menu()
         self.showMaximized()
 
     def switch_canvas(self, optimized: bool):
-        """Swaps the central canvas depending on the graph size."""
         if optimized:
-            self.canvas = GraphCanvasOptimized()
+            self.stacked_widget.setCurrentWidget(self.canvas_optimized)
+            self.canvas = self.canvas_optimized
         else:
-            self.canvas = GraphCanvas()
-        self.setCentralWidget(self.canvas)
-        # Re-raise the overlay so it doesn't get hidden behind the new canvas
-        if hasattr(self, 'overlay_panel'):
-            self.overlay_panel.raise_()
+            self.stacked_widget.setCurrentWidget(self.canvas_standard)
+            self.canvas = self.canvas_standard
+
+        if hasattr(self, 'overlay_container'):
+            self.overlay_container.raise_()
 
     def _setup_overlay_buttons(self):
-        self.overlay_panel = QWidget(self)
-        v_layout = QVBoxLayout(self.overlay_panel)
-        v_layout.setContentsMargins(0, 0, 0, 0)
-        v_layout.setSpacing(10)
+        self.overlay_container = QWidget(self)
 
+        main_layout = QVBoxLayout(self.overlay_container)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(5)
+
+        main_layout.addSpacing(30)
+
+        # 1. Expand/Collapse Button
+        self.btn_collapse = QPushButton("▶ Hide")
+        self.btn_collapse.setToolTip("Toggle Menu Visibility")
+        self.btn_collapse.clicked.connect(self.toggle_menu_visibility)
+        main_layout.addWidget(self.btn_collapse, alignment=Qt.AlignmentFlag.AlignRight)
+
+        # 2. Main Buttons Panel
+        self.button_panel = QWidget()
+        grid_layout = QGridLayout(self.button_panel)
+        grid_layout.setContentsMargins(0, 0, 0, 0)
+        grid_layout.setSpacing(10)
+
+        # Toggles (Column 0)
         self.btn_toggle_ds = QPushButton("👁")
         self.btn_toggle_ds.setToolTip("Show Dominating Set")
         self.btn_toggle_ds.setCheckable(True)
@@ -677,12 +663,7 @@ class MainWindow(QMainWindow):
         self.btn_toggle_cl.setEnabled(False)
         self.btn_toggle_cl.clicked.connect(self.toggle_clique)
 
-        h_toggle_layout = QHBoxLayout()
-        h_toggle_layout.addWidget(self.btn_toggle_ds)
-        h_toggle_layout.addWidget(self.btn_toggle_cl)
-        h_toggle_layout.addStretch()
-        v_layout.addLayout(h_toggle_layout)
-
+        # Layout Modes (Column 1)
         self.btn_radial = QPushButton("🌀")
         self.btn_radial.setToolTip("Radial layout")
         self.btn_radial.clicked.connect(lambda: self.run_layout("radial"))
@@ -699,23 +680,40 @@ class MainWindow(QMainWindow):
         self.btn_lowcross.setToolTip("Low-crossing layout")
         self.btn_lowcross.clicked.connect(lambda: self.run_layout("lowcross"))
 
-        h_layout_btns = QHBoxLayout()
-        h_layout_btns.addWidget(self.btn_radial)
-        h_layout_btns.addWidget(self.btn_pca)
-        h_layout_btns.addWidget(self.btn_spring)
-        h_layout_btns.addWidget(self.btn_lowcross)
-        h_layout_btns.addStretch()
-        v_layout.addLayout(h_layout_btns)
+        self.btn_matrix = QPushButton("▦")
+        self.btn_matrix.setToolTip("Adjacency Matrix")
+        self.btn_matrix.clicked.connect(lambda: self.run_layout("matrix"))
 
-        self.overlay_panel.setStyleSheet("""
+        # Add to Grid
+        grid_layout.addWidget(self.btn_toggle_ds, 0, 0)
+        grid_layout.addWidget(self.btn_toggle_cl, 1, 0)
+
+        grid_layout.addWidget(self.btn_radial, 0, 1)
+        grid_layout.addWidget(self.btn_pca, 1, 1)
+        grid_layout.addWidget(self.btn_spring, 2, 1)
+        grid_layout.addWidget(self.btn_lowcross, 3, 1)
+        grid_layout.addWidget(self.btn_matrix, 4, 1)
+
+        grid_layout.setRowStretch(5, 1)  # Push everything up
+        main_layout.addWidget(self.button_panel)
+
+        self.overlay_container.setStyleSheet("""
             QPushButton {
                 background-color: #1a1a1a;
                 color: #00f2ff;
                 border: 1px solid #333333;
                 border-radius: 4px;
-                padding: 10px 15px;
+                padding: 10px;
                 font-weight: bold;
-                font-size: 16px;
+                font-size: 20px;
+                min-width: 45px;
+                min-height: 45px;
+            }
+            QPushButton#collapseBtn {
+                font-size: 14px;
+                min-height: 30px;
+                min-width: 60px;
+                padding: 5px 10px;
             }
             QPushButton:hover { 
                 background-color: #333333; 
@@ -732,23 +730,42 @@ class MainWindow(QMainWindow):
                 border: 1px solid #00f2ff;
             }
         """)
-        self.overlay_panel.show()
-        self.overlay_panel.raise_()
+        self.btn_collapse.setObjectName("collapseBtn")
+        self.overlay_container.show()
+        self.overlay_container.raise_()
+
+    def toggle_menu_visibility(self):
+        is_visible = self.button_panel.isVisible()
+        self.button_panel.setVisible(not is_visible)
+        self.btn_collapse.setText("◀ Show" if is_visible else "▶ Hide")
+        self._update_overlay_position()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if hasattr(self, 'overlay_panel'):
-            h = self.overlay_panel.sizeHint().height()
-            w = self.overlay_panel.sizeHint().width()
-            self.overlay_panel.setGeometry(20, self.height() - h - 60, w, h)
+        self._update_overlay_position()
+
+    def _update_overlay_position(self):
+        if hasattr(self, 'overlay_container'):
+            self.overlay_container.adjustSize()
+            w = self.overlay_container.width()
+            h = self.overlay_container.height()
+            # Position at the top right, 20px padding
+            self.overlay_container.setGeometry(self.width() - w - 20, 20, w, h)
 
     def _setup_menu(self):
         menu_bar = self.menuBar()
         file_menu = menu_bar.addMenu("File")
+
         open_action = QAction("Open Graph...", self)
         open_action.setShortcut("Ctrl+O")
         open_action.triggered.connect(self.open_file)
         file_menu.addAction(open_action)
+
+        file_menu.addSeparator()
+
+        gen_sf_action = QAction("Generate Scale-free network...", self)
+        gen_sf_action.triggered.connect(self.generate_scale_free)
+        file_menu.addAction(gen_sf_action)
 
         compute_menu = menu_bar.addMenu("Compute")
 
@@ -768,55 +785,97 @@ class MainWindow(QMainWindow):
         clique_menu.addAction(algo_cl2_action)
         clique_menu.addAction(algo_cl3_action)
 
+    def generate_scale_free(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Generate Scale-free Network")
+        layout = QFormLayout(dialog)
+
+        n_spin = QSpinBox()
+        n_spin.setRange(1, 100000)
+        n_spin.setValue(500)
+
+        m_spin = QSpinBox()
+        m_spin.setRange(1, 1000)
+        m_spin.setValue(2)
+
+        layout.addRow("Number of vertices (n):", n_spin)
+        layout.addRow("Edges per new vertex (m):", m_spin)
+
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(dialog.accept)
+        btns.rejected.connect(dialog.reject)
+        layout.addWidget(btns)
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            n = n_spin.value()
+            m = m_spin.value()
+            if m >= n:
+                QMessageBox.warning(self, "Invalid Parameters", "m must be strictly less than n.")
+                return
+            self.current_graph = nx.barabasi_albert_graph(n, m)
+            self.setup_new_graph()
+
     def open_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Open Graph", "", "Graph Files (*.col *.graphml *.gml)")
         if path:
             self.current_graph = load_from_col_file(path)
-            self.dominating_set = []
-            self.show_dominating_set = False
-            self.btn_toggle_ds.setEnabled(False)
-            self.btn_toggle_ds.setChecked(False)
+            self.setup_new_graph()
 
-            self.clique = []
-            self.show_clique = False
-            self.btn_toggle_cl.setEnabled(False)
-            self.btn_toggle_cl.setChecked(False)
+    def setup_new_graph(self):
+        self.dominating_set = []
+        self.show_dominating_set = False
+        self.btn_toggle_ds.setEnabled(False)
+        self.btn_toggle_ds.setChecked(False)
 
-            num_nodes = self.current_graph.number_of_nodes()
-            num_edges = self.current_graph.number_of_edges()
+        self.clique = []
+        self.show_clique = False
+        self.btn_toggle_cl.setEnabled(False)
+        self.btn_toggle_cl.setChecked(False)
 
-            # Switch to Optimized canvas if the graph is huge
-            if num_nodes > 4000 or num_edges > 10000:
-                self.switch_canvas(optimized=True)
-            else:
-                self.switch_canvas(optimized=False)
+        num_nodes = self.current_graph.number_of_nodes()
+        num_edges = self.current_graph.number_of_edges()
 
-            # Disable expensive layout options if the graph size threatens to freeze the app
-            if num_nodes > 2500 or num_edges > 10000:
-                self.btn_spring.setEnabled(False)
-                self.btn_spring.setToolTip("Spring layout disabled (Graph too large)")
-            else:
-                self.btn_spring.setEnabled(True)
-                self.btn_spring.setToolTip("Spring layout")
+        if num_nodes > 4000 or num_edges > 10000:
+            self.switch_canvas(optimized=True)
+        else:
+            self.switch_canvas(optimized=False)
 
-            if num_nodes > 1250 or num_edges > 5000:
-                self.btn_lowcross.setEnabled(False)
-                self.btn_lowcross.setToolTip("Low-crossing layout disabled (Graph too large)")
-            else:
-                self.btn_lowcross.setEnabled(True)
-                self.btn_lowcross.setToolTip("Low-crossing layout")
+        if num_nodes > 2500 or num_edges > 10000:
+            self.btn_spring.setEnabled(False)
+            self.btn_spring.setToolTip("Spring layout disabled (Graph too large)")
+        else:
+            self.btn_spring.setEnabled(True)
+            self.btn_spring.setToolTip("Spring layout")
 
-            self.run_layout("radial")
+        if num_nodes > 1250 or num_edges > 5000:
+            self.btn_lowcross.setEnabled(False)
+            self.btn_lowcross.setToolTip("Low-crossing layout disabled (Graph too large)")
+        else:
+            self.btn_lowcross.setEnabled(True)
+            self.btn_lowcross.setToolTip("Low-crossing layout")
+
+        if num_nodes > 10000:
+            self.btn_matrix.setEnabled(False)
+            self.btn_matrix.setToolTip("Adjacency Matrix disabled (Graph too large - > 10k nodes)")
+        else:
+            self.btn_matrix.setEnabled(True)
+            self.btn_matrix.setToolTip("Adjacency Matrix")
+
+        self.run_layout("radial")
 
     def run_layout(self, mode):
         if not self.current_graph: return
 
         buttons = {"pca": self.btn_pca, "spring": self.btn_spring, "lowcross": self.btn_lowcross,
-                   "radial": self.btn_radial}
+                   "radial": self.btn_radial, "matrix": self.btn_matrix}
         for key, btn in buttons.items():
             btn.setProperty("active", key == mode)
             btn.style().unpolish(btn)
             btn.style().polish(btn)
+
+        if mode == "matrix":
+            self.show_adjacency_matrix()
+            return
 
         msg = "Calculating graph layout. This may take a moment..."
         self.progress = QProgressDialog(msg, None, 0, 0, self)
@@ -828,97 +887,92 @@ class MainWindow(QMainWindow):
         self.layout_thread.layout_finished.connect(self.on_layout_finished)
         self.layout_thread.start()
 
+    def show_adjacency_matrix(self):
+        G = self.current_graph
+        n = G.number_of_nodes()
+
+        if n > 10000:
+            QMessageBox.warning(self, "Too Large", "Graph is too large to render as a bitmap (>10,000 nodes).")
+            return
+
+        img = QImage(n, n, QImage.Format.Format_RGB32)
+        img.fill(Qt.GlobalColor.black)  # Black background
+
+        node_list = list(G.nodes())
+        node_idx = {node: i for i, node in enumerate(node_list)}
+
+        fg_color = QColor("#00f2ff")  # Contrasting cyan foreground
+
+        for u, v in G.edges():
+            i, j = node_idx[u], node_idx[v]
+            img.setPixelColor(i, j, fg_color)
+            img.setPixelColor(j, i, fg_color)
+
+        pixmap = QPixmap.fromImage(img)
+        self.canvas.scene.clear()
+        item = self.canvas.scene.addPixmap(pixmap)
+
+        rect = item.boundingRect()
+        self.canvas.setSceneRect(rect.adjusted(-50, -50, 50, 50))
+        self.canvas.fitInView(self.canvas.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+
     def on_layout_finished(self, pos):
-        self.progress.accept()
+        if hasattr(self, 'progress'):
+            self.progress.close()
         self.current_pos = pos
-        self.redraw_graph()
-
-    def run_dominating_set(self):
-        if not self.current_graph: return
-        msg = "Computing dominating set using ILP solution..."
-        self.ds_progress = QProgressDialog(msg, None, 0, 0, self)
-        self.ds_progress.setWindowModality(Qt.WindowModality.WindowModal)
-        self.ds_progress.setWindowTitle("Computing")
-        self.ds_progress.show()
-
-        self.ds_thread = DominatingSetThread(self.current_graph)
-        self.ds_thread.finished_computing.connect(self.on_dominating_set_finished)
-        self.ds_thread.start()
-
-    def run_clique_bopp_hald(self):
-        if not self.current_graph: return
-        msg = "Computing a large clique using Boppana-Halldórsson heuristic..."
-        self.cl_progress = QProgressDialog(msg, None, 0, 0, self)
-        self.cl_progress.setWindowModality(Qt.WindowModality.WindowModal)
-        self.cl_progress.setWindowTitle("Computing")
-        self.cl_progress.show()
-
-        self.cl_thread = CliqueThread(self.current_graph, "bopp_hald")
-        self.cl_thread.finished_computing.connect(self.on_clique_finished)
-        self.cl_thread.start()
-
-    def run_clique_greedy(self):
-        if not self.current_graph: return
-        msg = "Computing a large clique using greedy heuristic..."
-        self.cl_progress = QProgressDialog(msg, None, 0, 0, self)
-        self.cl_progress.setWindowModality(Qt.WindowModality.WindowModal)
-        self.cl_progress.setWindowTitle("Computing")
-        self.cl_progress.show()
-
-        self.cl_thread = CliqueThread(self.current_graph, "greedy")
-        self.cl_thread.finished_computing.connect(self.on_clique_finished)
-        self.cl_thread.start()
-
-    def run_clique_exact(self):
-        if not self.current_graph: return
-        msg = "Computing a large clique using an exact algorithm..."
-        self.cl_progress = QProgressDialog(msg, None, 0, 0, self)
-        self.cl_progress.setWindowModality(Qt.WindowModality.WindowModal)
-        self.cl_progress.setWindowTitle("Computing")
-        self.cl_progress.show()
-
-        self.cl_thread = CliqueThread(self.current_graph, "exact")
-        self.cl_thread.finished_computing.connect(self.on_clique_finished)
-        self.cl_thread.start()
-
-    def on_dominating_set_finished(self, dom_set):
-        self.ds_progress.accept()
-        if dom_set:
-            self.dominating_set = dom_set
-            self.btn_toggle_ds.setEnabled(True)
-            self.btn_toggle_ds.setChecked(True)
-            self.show_dominating_set = True
-            self.redraw_graph()
-            print(f"Dominating set computation completed! Dominating set size: {len(self.dominating_set)}")
-
-    def on_clique_finished(self, clique):
-        self.cl_progress.accept()
-        if clique:
-            self.clique = clique
-            self.btn_toggle_cl.setEnabled(True)
-            self.btn_toggle_cl.setChecked(True)
-            self.show_clique = True
-            self.redraw_graph()
-            print(f"Large clique computation completed! Clique size: {len(self.clique)}")
-
-    def toggle_dominating_set(self):
-        self.show_dominating_set = self.btn_toggle_ds.isChecked()
-        self.redraw_graph()
-
-    def toggle_clique(self):
-        self.show_clique = self.btn_toggle_cl.isChecked()
-        self.redraw_graph()
-
-    def redraw_graph(self):
-        dom_to_show = self.dominating_set if self.show_dominating_set else None
-        clique_to_show = self.clique if self.show_clique else None
-
         self.canvas.display_graph(
             self.current_graph,
             self.current_pos,
-            dom_nodes=dom_to_show,
-            clique_nodes=clique_to_show
+            self.dominating_set if self.show_dominating_set else None,
+            self.clique if self.show_clique else None
         )
+
+    def toggle_dominating_set(self):
+        self.show_dominating_set = self.btn_toggle_ds.isChecked()
+        if self.current_pos:
+            self.on_layout_finished(self.current_pos)
+
+    def toggle_clique(self):
+        self.show_clique = self.btn_toggle_cl.isChecked()
+        if self.current_pos:
+            self.on_layout_finished(self.current_pos)
+
+    def run_dominating_set(self):
+        if not self.current_graph: return
+        self.ds_thread = DominatingSetThread(self.current_graph)
+        self.ds_thread.finished_computing.connect(self.on_ds_finished)
+        self.ds_thread.start()
+
+    def on_ds_finished(self, ds):
+        self.dominating_set = ds
+        if ds:
+            self.btn_toggle_ds.setEnabled(True)
+            self.btn_toggle_ds.setChecked(True)
+            self.show_dominating_set = True
+            if self.current_pos: self.on_layout_finished(self.current_pos)
+
+    def run_clique_greedy(self):
+        self._run_clique("greedy")
+
+    def run_clique_bopp_hald(self):
+        self._run_clique("bopp_hald")
+
+    def run_clique_exact(self):
+        self._run_clique("exact")
+
+    def _run_clique(self, alg):
+        if not self.current_graph: return
+        self.cl_thread = CliqueThread(self.current_graph, alg)
+        self.cl_thread.finished_computing.connect(self.on_clique_finished)
+        self.cl_thread.start()
+
+    def on_clique_finished(self, clique):
+        self.clique = clique
+        if clique:
+            self.btn_toggle_cl.setEnabled(True)
+            self.btn_toggle_cl.setChecked(True)
+            self.show_clique = True
+            if self.current_pos: self.on_layout_finished(self.current_pos)
 
 
 if __name__ == "__main__":
