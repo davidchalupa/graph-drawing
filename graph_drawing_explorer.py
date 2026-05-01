@@ -3,7 +3,6 @@ import networkx as nx
 import numpy as np
 from sklearn.decomposition import PCA
 
-# --- UPDATED IMPORTS ---
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QGraphicsView, QGraphicsScene,
     QFileDialog, QProgressDialog, QPushButton, QHBoxLayout, QVBoxLayout, QWidget,
@@ -11,8 +10,7 @@ from PyQt6.QtWidgets import (
     QSpinBox, QDialogButtonBox, QMessageBox, QGridLayout
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QLineF, QRectF
-from PyQt6.QtGui import QColor, QPen, QBrush, QPainter, QAction, QPainterPath, QImage, QPixmap
-# -----------------------
+from PyQt6.QtGui import QColor, QPen, QBrush, QPainter, QAction, QPainterPath, QImage, QPixmap, QFont
 
 import math
 import random
@@ -499,6 +497,24 @@ class GraphCanvasOptimized(QGraphicsView):
         self.scale(zoom_factor, zoom_factor)
 
 
+def load_from_col_file(file_path):
+    G = nx.Graph()
+    try:
+        with open(file_path, 'r') as file:
+            for line in file:
+                line = line.strip()
+                if not line or line.startswith(('c', 'p')):
+                    continue
+                if line.startswith('e'):
+                    parts = line.split()
+                    u, v = int(parts[1]), int(parts[2])
+                    if u != v:
+                        G.add_edge(u, v)
+    except Exception as e:
+        print(f"File Load Error: {e}")
+    return G
+
+
 class GraphCanvas(QGraphicsView):
     def __init__(self):
         super().__init__()
@@ -512,13 +528,14 @@ class GraphCanvas(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
 
-    def display_graph(self, G, pos, dom_nodes=None, clique_nodes=None):
+    def display_graph(self, G, pos, dom_nodes=None, clique_nodes=None, node_labels=None):
         self.scene.clear()
         if not G or not pos:
             return
 
         dom_set = set(dom_nodes) if dom_nodes else set()
         clique_set = set(clique_nodes) if clique_nodes else set()
+        labels_dict = node_labels if node_labels else {}
 
         default_edge_pen = QPen(QColor(80, 80, 80, 100), 1)
         clique_edge_pen = QPen(QColor("#00FF00"), 2)
@@ -564,6 +581,18 @@ class GraphCanvas(QGraphicsView):
                 ellipse = self.scene.addEllipse(x - radius, y - radius, diameter, diameter, node_pen, brush)
                 ellipse.setZValue(3 if (is_dom or is_clique) else 2)
 
+                # Render computation text labels if active
+                if node in labels_dict:
+                    text_item = self.scene.addText(labels_dict[node])
+
+                    font = QFont("Arial", 16)
+                    font.setBold(True)
+                    text_item.setFont(font)
+
+                    text_item.setDefaultTextColor(QColor("#FFFFFF"))
+                    text_item.setPos(x + radius, y - radius)
+                    text_item.setZValue(4)
+
         rect = self.scene.itemsBoundingRect()
         margin = 50
         self.setSceneRect(rect.adjusted(-margin, -margin, margin, margin))
@@ -572,24 +601,6 @@ class GraphCanvas(QGraphicsView):
     def wheelEvent(self, event):
         zoom_factor = 1.25 if event.angleDelta().y() > 0 else 0.8
         self.scale(zoom_factor, zoom_factor)
-
-
-def load_from_col_file(file_path):
-    G = nx.Graph()
-    try:
-        with open(file_path, 'r') as file:
-            for line in file:
-                line = line.strip()
-                if not line or line.startswith(('c', 'p')):
-                    continue
-                if line.startswith('e'):
-                    parts = line.split()
-                    u, v = int(parts[1]), int(parts[2])
-                    if u != v:
-                        G.add_edge(u, v)
-    except Exception as e:
-        print(f"File Load Error: {e}")
-    return G
 
 
 class MainWindow(QMainWindow):
@@ -605,6 +616,12 @@ class MainWindow(QMainWindow):
 
         self.clique = []
         self.show_clique = False
+
+        self.clustering_coeffs = {}
+        self.show_clustering = False
+
+        self.betweenness_cent = {}
+        self.show_betweenness = False
 
         self.stacked_widget = QStackedWidget()
         self.canvas_standard = GraphCanvas()
@@ -663,6 +680,18 @@ class MainWindow(QMainWindow):
         self.btn_toggle_cl.setEnabled(False)
         self.btn_toggle_cl.clicked.connect(self.toggle_clique)
 
+        self.btn_toggle_cc = QPushButton("△")
+        self.btn_toggle_cc.setToolTip("Show Clustering Coefficients")
+        self.btn_toggle_cc.setCheckable(True)
+        self.btn_toggle_cc.setEnabled(False)
+        self.btn_toggle_cc.clicked.connect(self.toggle_clustering)
+
+        self.btn_toggle_bc = QPushButton("⛬")
+        self.btn_toggle_bc.setToolTip("Show Betweenness Centrality")
+        self.btn_toggle_bc.setCheckable(True)
+        self.btn_toggle_bc.setEnabled(False)
+        self.btn_toggle_bc.clicked.connect(self.toggle_betweenness)
+
         # Layout Modes (Column 1)
         self.btn_radial = QPushButton("🌀")
         self.btn_radial.setToolTip("Radial layout")
@@ -687,6 +716,8 @@ class MainWindow(QMainWindow):
         # Add to Grid
         grid_layout.addWidget(self.btn_toggle_ds, 0, 0)
         grid_layout.addWidget(self.btn_toggle_cl, 1, 0)
+        grid_layout.addWidget(self.btn_toggle_cc, 2, 0)
+        grid_layout.addWidget(self.btn_toggle_bc, 3, 0)
 
         grid_layout.addWidget(self.btn_radial, 0, 1)
         grid_layout.addWidget(self.btn_pca, 1, 1)
@@ -749,7 +780,6 @@ class MainWindow(QMainWindow):
             self.overlay_container.adjustSize()
             w = self.overlay_container.width()
             h = self.overlay_container.height()
-            # Position at the top right, 20px padding
             self.overlay_container.setGeometry(self.width() - w - 20, 20, w, h)
 
     def _setup_menu(self):
@@ -784,6 +814,16 @@ class MainWindow(QMainWindow):
         clique_menu.addAction(algo_cl1_action)
         clique_menu.addAction(algo_cl2_action)
         clique_menu.addAction(algo_cl3_action)
+
+        compute_menu.addSeparator()
+
+        cc_action = QAction("Clustering coefficients", self)
+        cc_action.triggered.connect(self.compute_clustering)
+        compute_menu.addAction(cc_action)
+
+        bc_action = QAction("Betweenness centrality", self)
+        bc_action.triggered.connect(self.compute_betweenness)
+        compute_menu.addAction(bc_action)
 
     def generate_scale_free(self):
         dialog = QDialog(self)
@@ -831,6 +871,16 @@ class MainWindow(QMainWindow):
         self.show_clique = False
         self.btn_toggle_cl.setEnabled(False)
         self.btn_toggle_cl.setChecked(False)
+
+        self.clustering_coeffs = {}
+        self.show_clustering = False
+        self.btn_toggle_cc.setEnabled(False)
+        self.btn_toggle_cc.setChecked(False)
+
+        self.betweenness_cent = {}
+        self.show_betweenness = False
+        self.btn_toggle_bc.setEnabled(False)
+        self.btn_toggle_bc.setChecked(False)
 
         num_nodes = self.current_graph.number_of_nodes()
         num_edges = self.current_graph.number_of_edges()
@@ -896,12 +946,12 @@ class MainWindow(QMainWindow):
             return
 
         img = QImage(n, n, QImage.Format.Format_RGB32)
-        img.fill(Qt.GlobalColor.black)  # Black background
+        img.fill(QColor("#0d0d0d"))  # Blends perfectly with canvas background
 
         node_list = list(G.nodes())
         node_idx = {node: i for i, node in enumerate(node_list)}
 
-        fg_color = QColor("#00f2ff")  # Contrasting cyan foreground
+        fg_color = QColor("#00f2ff")
 
         for u, v in G.edges():
             i, j = node_idx[u], node_idx[v]
@@ -917,14 +967,29 @@ class MainWindow(QMainWindow):
         self.canvas.fitInView(self.canvas.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
     def on_layout_finished(self, pos):
-        if hasattr(self, 'progress'):
+        if hasattr(self, 'progress') and self.progress is not None:
             self.progress.close()
+            self.progress = None
+
         self.current_pos = pos
+        node_labels = {}
+
+        if self.show_clustering or self.show_betweenness:
+            for n in self.current_graph.nodes():
+                lbls = []
+                if self.show_clustering and n in self.clustering_coeffs:
+                    lbls.append(f"C: {self.clustering_coeffs[n]}")
+                if self.show_betweenness and n in self.betweenness_cent:
+                    lbls.append(f"B: {self.betweenness_cent[n]}")
+                if lbls:
+                    node_labels[n] = "\n".join(lbls)
+
         self.canvas.display_graph(
             self.current_graph,
             self.current_pos,
             self.dominating_set if self.show_dominating_set else None,
-            self.clique if self.show_clique else None
+            self.clique if self.show_clique else None,
+            node_labels=node_labels
         )
 
     def toggle_dominating_set(self):
@@ -936,6 +1001,42 @@ class MainWindow(QMainWindow):
         self.show_clique = self.btn_toggle_cl.isChecked()
         if self.current_pos:
             self.on_layout_finished(self.current_pos)
+
+    def toggle_clustering(self):
+        self.show_clustering = self.btn_toggle_cc.isChecked()
+        if self.current_pos:
+            self.on_layout_finished(self.current_pos)
+
+    def toggle_betweenness(self):
+        self.show_betweenness = self.btn_toggle_bc.isChecked()
+        if self.current_pos:
+            self.on_layout_finished(self.current_pos)
+
+    def compute_clustering(self):
+        if not self.current_graph: return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            raw_cc = nx.clustering(self.current_graph)
+            self.clustering_coeffs = {n: round(v, 3) for n, v in raw_cc.items()}
+            self.btn_toggle_cc.setEnabled(True)
+            self.btn_toggle_cc.setChecked(True)
+            self.show_clustering = True
+            if self.current_pos: self.on_layout_finished(self.current_pos)
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def compute_betweenness(self):
+        if not self.current_graph: return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            raw_bc = nx.betweenness_centrality(self.current_graph)
+            self.betweenness_cent = {n: round(v, 4) for n, v in raw_bc.items()}
+            self.btn_toggle_bc.setEnabled(True)
+            self.btn_toggle_bc.setChecked(True)
+            self.show_betweenness = True
+            if self.current_pos: self.on_layout_finished(self.current_pos)
+        finally:
+            QApplication.restoreOverrideCursor()
 
     def run_dominating_set(self):
         if not self.current_graph: return
