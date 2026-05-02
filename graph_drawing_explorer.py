@@ -202,7 +202,7 @@ class GraphCanvasOptimized(QGraphicsView):
         if pts_both:
             self.scene.addItem(FastNodeItem(pts_both, "#FFFFFF", 8, scene_rect, z_value=5, is_highlight=True))
 
-        # Note: Intentionally skipping `node_labels` rendering in the optimized canvas.
+        # ToDo: Intentionally skipping `node_labels` rendering in the optimized canvas for now
         # Rendering thousands of individual QGraphicsTextItems destroys OpenGL batching performance.
 
         self.setSceneRect(scene_rect)
@@ -349,13 +349,12 @@ class MainWindow(QMainWindow):
         self.showMaximized()
 
     def switch_canvas(self, optimized: bool):
-        # NOTE: Make sure self.canvas_optimized is instantiated properly if you re-enable it.
-        # if optimized:
-        #     self.stacked_widget.setCurrentWidget(self.canvas_optimized)
-        #     self.canvas = self.canvas_optimized
-        # else:
-        self.stacked_widget.setCurrentWidget(self.canvas_standard)
-        self.canvas = self.canvas_standard
+        if optimized:
+            self.stacked_widget.setCurrentWidget(self.canvas_optimized)
+            self.canvas = self.canvas_optimized
+        else:
+            self.stacked_widget.setCurrentWidget(self.canvas_standard)
+            self.canvas = self.canvas_standard
 
         if hasattr(self, 'overlay_container'):
             self.overlay_container.raise_()
@@ -582,7 +581,6 @@ class MainWindow(QMainWindow):
     def open_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Open Graph", "", "Graph Files (*.col *.graphml *.gml)")
         if path:
-            # Assumes load_from_col_file is imported or defined elsewhere
             self.current_graph = load_from_col_file(path)
             self.setup_new_graph()
 
@@ -663,7 +661,6 @@ class MainWindow(QMainWindow):
         self.progress.setWindowTitle("Progress")
         self.progress.show()
 
-        # Assumes LayoutThread is defined elsewhere
         self.layout_thread = LayoutThread(self.current_graph, mode)
         self.layout_thread.layout_finished.connect(self.on_layout_finished)
         self.layout_thread.start()
@@ -794,7 +791,6 @@ class MainWindow(QMainWindow):
 
     def run_dominating_set(self):
         if not self.current_graph: return
-        # Assumes DominatingSetThread is defined elsewhere
         self.ds_thread = DominatingSetThread(self.current_graph)
         self.ds_thread.finished_computing.connect(self.on_ds_finished)
         self.ds_thread.start()
@@ -815,7 +811,6 @@ class MainWindow(QMainWindow):
 
     def _run_clique(self, alg):
         if not self.current_graph: return
-        # Assumes CliqueThread is defined elsewhere
         self.cl_thread = CliqueThread(self.current_graph, alg)
         self.cl_thread.finished_computing.connect(self.on_clique_finished)
         self.cl_thread.start()
