@@ -33,7 +33,7 @@ class LayoutThread(QThread):
             pos = nx.spring_layout(self.G, scale=1000)
 
         seen_positions = {}
-        jitter_amount = 0.1
+        jitter_amount = 1.0
 
         for node in pos:
             p_tuple = (round(pos[node][0], 6), round(pos[node][1], 6))
