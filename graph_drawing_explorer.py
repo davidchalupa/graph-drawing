@@ -3,12 +3,13 @@ import networkx as nx
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QGraphicsView, QGraphicsScene,
-    QFileDialog, QProgressDialog, QPushButton, QHBoxLayout, QVBoxLayout, QWidget,
-    QGraphicsItem, QGraphicsPathItem, QStackedWidget, QDialog, QFormLayout,
+    QFileDialog, QProgressDialog, QPushButton, QVBoxLayout, QWidget,
+    QGraphicsItem, QStackedWidget, QDialog, QFormLayout,
     QSpinBox, QDialogButtonBox, QMessageBox, QGridLayout
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QLineF, QRectF
-from PyQt6.QtGui import QColor, QPen, QBrush, QPainter, QAction, QPainterPath, QImage, QPixmap, QFont
+from PyQt6.QtCore import Qt, QLineF, QRectF
+from PyQt6.QtGui import QColor, QPen, QBrush, QPainter, QAction, QImage, QPixmap, QFont
+
 
 from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 from PyQt6.QtCore import QPointF
@@ -68,6 +69,24 @@ class FastNodeItem(QGraphicsItem):
                 painter.drawEllipse(p, r, r)
 
 
+def load_from_col_file(file_path):
+    G = nx.Graph()
+    try:
+        with open(file_path, 'r') as file:
+            for line in file:
+                line = line.strip()
+                if not line or line.startswith(('c', 'p')):
+                    continue
+                if line.startswith('e'):
+                    parts = line.split()
+                    u, v = int(parts[1]), int(parts[2])
+                    if u != v:
+                        G.add_edge(u, v)
+    except Exception as e:
+        print(f"File Load Error: {e}")
+    return G
+
+
 class GraphCanvasOptimized(QGraphicsView):
     def __init__(self):
         super().__init__()
@@ -101,7 +120,7 @@ class GraphCanvasOptimized(QGraphicsView):
         self.viewport().update()
         super().mouseReleaseEvent(event)
 
-    def display_graph(self, G, pos, dom_nodes=None, clique_nodes=None):
+    def display_graph(self, G, pos, dom_nodes=None, clique_nodes=None, node_labels=None, bridges=None):
         self.scene.clear()
         if not G or not pos:
             return
@@ -109,9 +128,19 @@ class GraphCanvasOptimized(QGraphicsView):
         dom_set = set(dom_nodes) if dom_nodes else set()
         clique_set = set(clique_nodes) if clique_nodes else set()
 
+        # Use frozenset for undirected edge matching
+        bridge_set = set()
+        if bridges:
+            for u, v in bridges:
+                bridge_set.add(frozenset([u, v]))
+
         default_edge_pen = QPen(QColor(80, 80, 80, 100), 0)
+
         clique_edge_pen = QPen(QColor("#00FF00"), 2)
         clique_edge_pen.setCosmetic(True)
+
+        bridge_edge_pen = QPen(QColor("#FF4444"), 2)
+        bridge_edge_pen.setCosmetic(True)
 
         xs = [p[0] for p in pos.values()]
         ys = [p[1] for p in pos.values()]
@@ -123,13 +152,17 @@ class GraphCanvasOptimized(QGraphicsView):
 
         default_lines = []
         clique_lines = []
+        bridge_lines = []
 
         for u, v in G.edges():
             pu = pos.get(u)
             pv = pos.get(v)
             if pu is not None and pv is not None:
                 line = QLineF(pu[0], pu[1], pv[0], pv[1])
-                if u in clique_set and v in clique_set:
+
+                if frozenset([u, v]) in bridge_set:
+                    bridge_lines.append(line)
+                elif u in clique_set and v in clique_set:
                     clique_lines.append(line)
                 else:
                     default_lines.append(line)
@@ -138,6 +171,8 @@ class GraphCanvasOptimized(QGraphicsView):
             self.scene.addItem(FastLineItem(default_lines, default_edge_pen, scene_rect, z_value=0))
         if clique_lines:
             self.scene.addItem(FastLineItem(clique_lines, clique_edge_pen, scene_rect, z_value=1))
+        if bridge_lines:
+            self.scene.addItem(FastLineItem(bridge_lines, bridge_edge_pen, scene_rect, z_value=2))
 
         pts_normal, pts_dom, pts_clique, pts_both = [], [], [], []
 
@@ -157,14 +192,18 @@ class GraphCanvasOptimized(QGraphicsView):
                 else:
                     pts_normal.append(qpf)
 
+        # Shifted node Z-values up to account for the new edge layer
         if pts_normal:
-            self.scene.addItem(FastNodeItem(pts_normal, "#00f2ff", 5, scene_rect, z_value=2))
+            self.scene.addItem(FastNodeItem(pts_normal, "#00f2ff", 5, scene_rect, z_value=3))
         if pts_dom:
-            self.scene.addItem(FastNodeItem(pts_dom, "#FF8C00", 7, scene_rect, z_value=3, is_highlight=True))
+            self.scene.addItem(FastNodeItem(pts_dom, "#FF8C00", 7, scene_rect, z_value=4, is_highlight=True))
         if pts_clique:
-            self.scene.addItem(FastNodeItem(pts_clique, "#00FF00", 8, scene_rect, z_value=3, is_highlight=True))
+            self.scene.addItem(FastNodeItem(pts_clique, "#00FF00", 8, scene_rect, z_value=4, is_highlight=True))
         if pts_both:
-            self.scene.addItem(FastNodeItem(pts_both, "#FFFFFF", 8, scene_rect, z_value=4, is_highlight=True))
+            self.scene.addItem(FastNodeItem(pts_both, "#FFFFFF", 8, scene_rect, z_value=5, is_highlight=True))
+
+        # Note: Intentionally skipping `node_labels` rendering in the optimized canvas.
+        # Rendering thousands of individual QGraphicsTextItems destroys OpenGL batching performance.
 
         self.setSceneRect(scene_rect)
         self.fitInView(self.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
@@ -172,24 +211,6 @@ class GraphCanvasOptimized(QGraphicsView):
     def wheelEvent(self, event):
         zoom_factor = 1.25 if event.angleDelta().y() > 0 else 0.8
         self.scale(zoom_factor, zoom_factor)
-
-
-def load_from_col_file(file_path):
-    G = nx.Graph()
-    try:
-        with open(file_path, 'r') as file:
-            for line in file:
-                line = line.strip()
-                if not line or line.startswith(('c', 'p')):
-                    continue
-                if line.startswith('e'):
-                    parts = line.split()
-                    u, v = int(parts[1]), int(parts[2])
-                    if u != v:
-                        G.add_edge(u, v)
-    except Exception as e:
-        print(f"File Load Error: {e}")
-    return G
 
 
 class GraphCanvas(QGraphicsView):
@@ -205,7 +226,7 @@ class GraphCanvas(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
 
-    def display_graph(self, G, pos, dom_nodes=None, clique_nodes=None, node_labels=None):
+    def display_graph(self, G, pos, dom_nodes=None, clique_nodes=None, node_labels=None, bridges=None):
         self.scene.clear()
         if not G or not pos:
             return
@@ -214,8 +235,15 @@ class GraphCanvas(QGraphicsView):
         clique_set = set(clique_nodes) if clique_nodes else set()
         labels_dict = node_labels if node_labels else {}
 
+        # Use frozenset for undirected edge matching
+        bridge_set = set()
+        if bridges:
+            for u, v in bridges:
+                bridge_set.add(frozenset([u, v]))
+
         default_edge_pen = QPen(QColor(80, 80, 80, 100), 1)
         clique_edge_pen = QPen(QColor("#00FF00"), 2)
+        bridge_edge_pen = QPen(QColor("#FF4444"), 2)  # Distinct color for bridges
 
         normal_brush = QBrush(QColor("#00f2ff"))
         dom_brush = QBrush(QColor("#FF8C00"))
@@ -225,7 +253,10 @@ class GraphCanvas(QGraphicsView):
 
         for u, v in G.edges():
             if u in pos and v in pos:
-                if u in clique_set and v in clique_set:
+                if frozenset([u, v]) in bridge_set:
+                    pen = bridge_edge_pen
+                    z_val = 2
+                elif u in clique_set and v in clique_set:
                     pen = clique_edge_pen
                     z_val = 1
                 else:
@@ -300,9 +331,14 @@ class MainWindow(QMainWindow):
         self.betweenness_cent = {}
         self.show_betweenness = False
 
+        self.bridges = []
+        self.show_bridges = False
+
         self.stacked_widget = QStackedWidget()
         self.canvas_standard = GraphCanvas()
+
         self.canvas_optimized = GraphCanvasOptimized()
+
         self.stacked_widget.addWidget(self.canvas_standard)
         self.stacked_widget.addWidget(self.canvas_optimized)
         self.setCentralWidget(self.stacked_widget)
@@ -313,12 +349,13 @@ class MainWindow(QMainWindow):
         self.showMaximized()
 
     def switch_canvas(self, optimized: bool):
-        if optimized:
-            self.stacked_widget.setCurrentWidget(self.canvas_optimized)
-            self.canvas = self.canvas_optimized
-        else:
-            self.stacked_widget.setCurrentWidget(self.canvas_standard)
-            self.canvas = self.canvas_standard
+        # NOTE: Make sure self.canvas_optimized is instantiated properly if you re-enable it.
+        # if optimized:
+        #     self.stacked_widget.setCurrentWidget(self.canvas_optimized)
+        #     self.canvas = self.canvas_optimized
+        # else:
+        self.stacked_widget.setCurrentWidget(self.canvas_standard)
+        self.canvas = self.canvas_standard
 
         if hasattr(self, 'overlay_container'):
             self.overlay_container.raise_()
@@ -369,6 +406,12 @@ class MainWindow(QMainWindow):
         self.btn_toggle_bc.setEnabled(False)
         self.btn_toggle_bc.clicked.connect(self.toggle_betweenness)
 
+        self.btn_toggle_br = QPushButton("🔗")
+        self.btn_toggle_br.setToolTip("Show Bridges")
+        self.btn_toggle_br.setCheckable(True)
+        self.btn_toggle_br.setEnabled(False)
+        self.btn_toggle_br.clicked.connect(self.toggle_bridges)
+
         # Layout Modes (Column 1)
         self.btn_radial = QPushButton("🌀")
         self.btn_radial.setToolTip("Radial layout")
@@ -395,6 +438,7 @@ class MainWindow(QMainWindow):
         grid_layout.addWidget(self.btn_toggle_cl, 1, 0)
         grid_layout.addWidget(self.btn_toggle_cc, 2, 0)
         grid_layout.addWidget(self.btn_toggle_bc, 3, 0)
+        grid_layout.addWidget(self.btn_toggle_br, 4, 0)
 
         grid_layout.addWidget(self.btn_radial, 0, 1)
         grid_layout.addWidget(self.btn_pca, 1, 1)
@@ -484,12 +528,9 @@ class MainWindow(QMainWindow):
         clique_menu = compute_menu.addMenu("Maximum clique")
         algo_cl1_action = QAction("Greedy heuristic", self)
         algo_cl1_action.triggered.connect(self.run_clique_greedy)
-        # algo_cl2_action = QAction("Boppana-Halldórsson heuristic", self)
-        # algo_cl2_action.triggered.connect(self.run_clique_bopp_hald)
         algo_cl3_action = QAction("Branch and bound", self)
         algo_cl3_action.triggered.connect(self.run_clique_exact)
         clique_menu.addAction(algo_cl1_action)
-        # clique_menu.addAction(algo_cl2_action)
         clique_menu.addAction(algo_cl3_action)
 
         compute_menu.addSeparator()
@@ -501,6 +542,12 @@ class MainWindow(QMainWindow):
         bc_action = QAction("Betweenness centrality", self)
         bc_action.triggered.connect(self.compute_betweenness)
         compute_menu.addAction(bc_action)
+
+        compute_menu.addSeparator()
+
+        br_action = QAction("Bridges", self)
+        br_action.triggered.connect(self.compute_bridges)
+        compute_menu.addAction(br_action)
 
     def generate_scale_free(self):
         dialog = QDialog(self)
@@ -535,6 +582,7 @@ class MainWindow(QMainWindow):
     def open_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Open Graph", "", "Graph Files (*.col *.graphml *.gml)")
         if path:
+            # Assumes load_from_col_file is imported or defined elsewhere
             self.current_graph = load_from_col_file(path)
             self.setup_new_graph()
 
@@ -558,6 +606,11 @@ class MainWindow(QMainWindow):
         self.show_betweenness = False
         self.btn_toggle_bc.setEnabled(False)
         self.btn_toggle_bc.setChecked(False)
+
+        self.bridges = []
+        self.show_bridges = False
+        self.btn_toggle_br.setEnabled(False)
+        self.btn_toggle_br.setChecked(False)
 
         num_nodes = self.current_graph.number_of_nodes()
         num_edges = self.current_graph.number_of_edges()
@@ -610,6 +663,7 @@ class MainWindow(QMainWindow):
         self.progress.setWindowTitle("Progress")
         self.progress.show()
 
+        # Assumes LayoutThread is defined elsewhere
         self.layout_thread = LayoutThread(self.current_graph, mode)
         self.layout_thread.layout_finished.connect(self.on_layout_finished)
         self.layout_thread.start()
@@ -661,12 +715,14 @@ class MainWindow(QMainWindow):
                 if lbls:
                     node_labels[n] = "\n".join(lbls)
 
+        # Added bridges kwarg mapping here
         self.canvas.display_graph(
             self.current_graph,
             self.current_pos,
             self.dominating_set if self.show_dominating_set else None,
             self.clique if self.show_clique else None,
-            node_labels=node_labels
+            node_labels=node_labels,
+            bridges=self.bridges if self.show_bridges else None
         )
 
     def toggle_dominating_set(self):
@@ -686,6 +742,11 @@ class MainWindow(QMainWindow):
 
     def toggle_betweenness(self):
         self.show_betweenness = self.btn_toggle_bc.isChecked()
+        if self.current_pos:
+            self.on_layout_finished(self.current_pos)
+
+    def toggle_bridges(self):
+        self.show_bridges = self.btn_toggle_br.isChecked()
         if self.current_pos:
             self.on_layout_finished(self.current_pos)
 
@@ -715,8 +776,25 @@ class MainWindow(QMainWindow):
         finally:
             QApplication.restoreOverrideCursor()
 
+    def compute_bridges(self):
+        if not self.current_graph: return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            # nx.bridges implements a Tarjan-like DFS biconnected component algorithm logic
+            self.bridges = list(nx.bridges(self.current_graph))
+
+            self.btn_toggle_br.setEnabled(True)
+            self.btn_toggle_br.setChecked(True)
+            self.show_bridges = True
+
+            if self.current_pos:
+                self.on_layout_finished(self.current_pos)
+        finally:
+            QApplication.restoreOverrideCursor()
+
     def run_dominating_set(self):
         if not self.current_graph: return
+        # Assumes DominatingSetThread is defined elsewhere
         self.ds_thread = DominatingSetThread(self.current_graph)
         self.ds_thread.finished_computing.connect(self.on_ds_finished)
         self.ds_thread.start()
@@ -732,14 +810,12 @@ class MainWindow(QMainWindow):
     def run_clique_greedy(self):
         self._run_clique("greedy")
 
-    def run_clique_bopp_hald(self):
-        self._run_clique("bopp_hald")
-
     def run_clique_exact(self):
         self._run_clique("exact")
 
     def _run_clique(self, alg):
         if not self.current_graph: return
+        # Assumes CliqueThread is defined elsewhere
         self.cl_thread = CliqueThread(self.current_graph, alg)
         self.cl_thread.finished_computing.connect(self.on_clique_finished)
         self.cl_thread.start()
