@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QGraphicsView, QGraphicsScene,
     QFileDialog, QProgressDialog, QPushButton, QVBoxLayout, QWidget,
     QGraphicsItem, QStackedWidget, QDialog, QFormLayout,
-    QSpinBox, QDialogButtonBox, QMessageBox, QGridLayout
+    QSpinBox, QDialogButtonBox, QMessageBox, QGridLayout, QDoubleSpinBox
 )
 from PyQt6.QtCore import Qt, QLineF, QRectF
 from PyQt6.QtGui import QColor, QPen, QBrush, QPainter, QAction, QImage, QPixmap, QFont
@@ -513,9 +513,16 @@ class MainWindow(QMainWindow):
 
         file_menu.addSeparator()
 
-        gen_sf_action = QAction("Generate Scale-free network...", self)
+        # Grouped Generators into a submenu
+        generate_menu = file_menu.addMenu("Generate")
+
+        gen_sf_action = QAction("Barabási-Albert (Scale-free)...", self)
         gen_sf_action.triggered.connect(self.generate_scale_free)
-        file_menu.addAction(gen_sf_action)
+        generate_menu.addAction(gen_sf_action)
+
+        gen_hk_action = QAction("Holme-Kim (Powerlaw Cluster)...", self)
+        gen_hk_action.triggered.connect(self.generate_powerlaw_cluster)
+        generate_menu.addAction(gen_hk_action)
 
         compute_menu = menu_bar.addMenu("Compute")
 
@@ -576,6 +583,43 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Invalid Parameters", "m must be strictly less than n.")
                 return
             self.current_graph = nx.barabasi_albert_graph(n, m)
+            self.setup_new_graph()
+
+    def generate_powerlaw_cluster(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Generate Powerlaw Cluster Network")
+        layout = QFormLayout(dialog)
+
+        n_spin = QSpinBox()
+        n_spin.setRange(1, 100000)
+        n_spin.setValue(500)
+
+        m_spin = QSpinBox()
+        m_spin.setRange(1, 1000)
+        m_spin.setValue(2)
+
+        p_spin = QDoubleSpinBox()
+        p_spin.setRange(0.0, 1.0)
+        p_spin.setSingleStep(0.1)
+        p_spin.setValue(0.5)
+
+        layout.addRow("Number of vertices (n):", n_spin)
+        layout.addRow("Random edges per vertex (m):", m_spin)
+        layout.addRow("Triangle formation prob (p):", p_spin)
+
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(dialog.accept)
+        btns.rejected.connect(dialog.reject)
+        layout.addWidget(btns)
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            n = n_spin.value()
+            m = m_spin.value()
+            p = p_spin.value()
+            if m >= n:
+                QMessageBox.warning(self, "Invalid Parameters", "m must be strictly less than n.")
+                return
+            self.current_graph = nx.powerlaw_cluster_graph(n, m, p)
             self.setup_new_graph()
 
     def open_file(self):
@@ -712,7 +756,6 @@ class MainWindow(QMainWindow):
                 if lbls:
                     node_labels[n] = "\n".join(lbls)
 
-        # Added bridges kwarg mapping here
         self.canvas.display_graph(
             self.current_graph,
             self.current_pos,
@@ -777,13 +820,10 @@ class MainWindow(QMainWindow):
         if not self.current_graph: return
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            # nx.bridges implements a Tarjan-like DFS biconnected component algorithm logic
             self.bridges = list(nx.bridges(self.current_graph))
-
             self.btn_toggle_br.setEnabled(True)
             self.btn_toggle_br.setChecked(True)
             self.show_bridges = True
-
             if self.current_pos:
                 self.on_layout_finished(self.current_pos)
         finally:
