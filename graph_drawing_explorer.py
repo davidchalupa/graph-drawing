@@ -2,71 +2,20 @@ import sys
 import networkx as nx
 
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QGraphicsView, QGraphicsScene,
+    QApplication, QMainWindow,
     QFileDialog, QProgressDialog, QPushButton, QVBoxLayout, QWidget,
-    QGraphicsItem, QStackedWidget, QDialog, QFormLayout,
+    QStackedWidget, QDialog, QFormLayout,
     QSpinBox, QDialogButtonBox, QMessageBox, QGridLayout, QDoubleSpinBox
 )
-from PyQt6.QtCore import Qt, QLineF, QRectF
-from PyQt6.QtGui import QColor, QPen, QBrush, QPainter, QAction, QImage, QPixmap, QFont
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor, QAction, QImage, QPixmap
 
-
-from PyQt6.QtOpenGLWidgets import QOpenGLWidget
-from PyQt6.QtCore import QPointF
+from graph_canvas import GraphCanvas
+from graph_canvas_optimized import GraphCanvasOptimized
 
 from dominating_set_thread import DominatingSetThread
 from clique_thread import CliqueThread
 from layout_thread import LayoutThread
-
-
-class FastLineItem(QGraphicsItem):
-    def __init__(self, lines, pen, bounding_rect, z_value=0):
-        super().__init__()
-        self.lines = lines
-        self._pen = pen
-        self._boundingRect = bounding_rect
-        self.setZValue(z_value)
-
-    def boundingRect(self):
-        return self._boundingRect
-
-    def paint(self, painter, option, widget):
-        view = widget.parent()
-        if isinstance(view, GraphCanvasOptimized) and view.is_interacting and self.zValue() == 0:
-            return
-        lod = option.levelOfDetailFromTransform(painter.worldTransform())
-        if lod < 0.15 and self.zValue() == 0:
-            return
-        painter.setPen(self._pen)
-        painter.drawLines(self.lines)
-
-
-class FastNodeItem(QGraphicsItem):
-    def __init__(self, points, color, radius, bounding_rect, z_value=0, is_highlight=False):
-        super().__init__()
-        self.points = points
-        self.color = QColor(color)
-        self.radius = radius
-        self._boundingRect = bounding_rect
-        self.setZValue(z_value)
-        self.is_highlight = is_highlight
-
-    def boundingRect(self):
-        return self._boundingRect
-
-    def paint(self, painter, option, widget):
-        lod = option.levelOfDetailFromTransform(painter.worldTransform())
-        if lod < 0.5 and not self.is_highlight:
-            pen = QPen(self.color, self.radius * 2)
-            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-            painter.setPen(pen)
-            painter.drawPoints(self.points)
-        else:
-            painter.setPen(QPen(Qt.GlobalColor.black, 0))
-            painter.setBrush(QBrush(self.color))
-            r = self.radius
-            for p in self.points:
-                painter.drawEllipse(p, r, r)
 
 
 def load_from_col_file(file_path):
@@ -85,230 +34,6 @@ def load_from_col_file(file_path):
     except Exception as e:
         print(f"File Load Error: {e}")
     return G
-
-
-class GraphCanvasOptimized(QGraphicsView):
-    def __init__(self):
-        super().__init__()
-        self.is_interacting = False
-        self.scene = QGraphicsScene(self)
-        self.setScene(self.scene)
-
-        self.gl_widget = QOpenGLWidget()
-        self.setViewport(self.gl_widget)
-
-        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setBackgroundBrush(QColor("#0d0d0d"))
-        self.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
-        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
-
-        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.SmartViewportUpdate)
-        self.setOptimizationFlag(QGraphicsView.OptimizationFlag.DontSavePainterState)
-        self.setOptimizationFlag(QGraphicsView.OptimizationFlag.DontAdjustForAntialiasing)
-
-        self.scene.setItemIndexMethod(QGraphicsScene.ItemIndexMethod.NoIndex)
-        self.setOptimizationFlag(QGraphicsView.OptimizationFlag.DontSavePainterState)
-
-    def mousePressEvent(self, event):
-        self.is_interacting = True
-        self.viewport().update()
-        super().mousePressEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        self.is_interacting = False
-        self.viewport().update()
-        super().mouseReleaseEvent(event)
-
-    def display_graph(self, G, pos, dom_nodes=None, clique_nodes=None, node_labels=None, bridges=None):
-        self.scene.clear()
-        if not G or not pos:
-            return
-
-        dom_set = set(dom_nodes) if dom_nodes else set()
-        clique_set = set(clique_nodes) if clique_nodes else set()
-
-        # Use frozenset for undirected edge matching
-        bridge_set = set()
-        if bridges:
-            for u, v in bridges:
-                bridge_set.add(frozenset([u, v]))
-
-        default_edge_pen = QPen(QColor(80, 80, 80, 100), 0)
-
-        clique_edge_pen = QPen(QColor("#00FF00"), 2)
-        clique_edge_pen.setCosmetic(True)
-
-        bridge_edge_pen = QPen(QColor("#FF4444"), 2)
-        bridge_edge_pen.setCosmetic(True)
-
-        xs = [p[0] for p in pos.values()]
-        ys = [p[1] for p in pos.values()]
-        if xs:
-            min_x, max_x, min_y, max_y = min(xs), max(xs), min(ys), max(ys)
-            scene_rect = QRectF(min_x - 50, min_y - 50, max_x - min_x + 100, max_y - min_y + 100)
-        else:
-            scene_rect = QRectF(0, 0, 100, 100)
-
-        default_lines = []
-        clique_lines = []
-        bridge_lines = []
-
-        for u, v in G.edges():
-            pu = pos.get(u)
-            pv = pos.get(v)
-            if pu is not None and pv is not None:
-                line = QLineF(pu[0], pu[1], pv[0], pv[1])
-
-                if frozenset([u, v]) in bridge_set:
-                    bridge_lines.append(line)
-                elif u in clique_set and v in clique_set:
-                    clique_lines.append(line)
-                else:
-                    default_lines.append(line)
-
-        if default_lines:
-            self.scene.addItem(FastLineItem(default_lines, default_edge_pen, scene_rect, z_value=0))
-        if clique_lines:
-            self.scene.addItem(FastLineItem(clique_lines, clique_edge_pen, scene_rect, z_value=1))
-        if bridge_lines:
-            self.scene.addItem(FastLineItem(bridge_lines, bridge_edge_pen, scene_rect, z_value=2))
-
-        pts_normal, pts_dom, pts_clique, pts_both = [], [], [], []
-
-        for node in G.nodes():
-            p = pos.get(node)
-            if p is not None:
-                qpf = QPointF(p[0], p[1])
-                is_dom = node in dom_set
-                is_clique = node in clique_set
-
-                if is_dom and is_clique:
-                    pts_both.append(qpf)
-                elif is_clique:
-                    pts_clique.append(qpf)
-                elif is_dom:
-                    pts_dom.append(qpf)
-                else:
-                    pts_normal.append(qpf)
-
-        # Shifted node Z-values up to account for the new edge layer
-        if pts_normal:
-            self.scene.addItem(FastNodeItem(pts_normal, "#00f2ff", 5, scene_rect, z_value=3))
-        if pts_dom:
-            self.scene.addItem(FastNodeItem(pts_dom, "#FF8C00", 7, scene_rect, z_value=4, is_highlight=True))
-        if pts_clique:
-            self.scene.addItem(FastNodeItem(pts_clique, "#00FF00", 8, scene_rect, z_value=4, is_highlight=True))
-        if pts_both:
-            self.scene.addItem(FastNodeItem(pts_both, "#FFFFFF", 8, scene_rect, z_value=5, is_highlight=True))
-
-        # ToDo: Intentionally skipping `node_labels` rendering in the optimized canvas for now
-        # Rendering thousands of individual QGraphicsTextItems destroys OpenGL batching performance.
-
-        self.setSceneRect(scene_rect)
-        self.fitInView(self.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
-
-    def wheelEvent(self, event):
-        zoom_factor = 1.25 if event.angleDelta().y() > 0 else 0.8
-        self.scale(zoom_factor, zoom_factor)
-
-
-class GraphCanvas(QGraphicsView):
-    def __init__(self):
-        super().__init__()
-        self.scene = QGraphicsScene(self)
-        self.setScene(self.scene)
-
-        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setBackgroundBrush(QColor("#0d0d0d"))
-        self.setRenderHint(QPainter.RenderHint.Antialiasing)
-        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
-        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
-        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
-
-    def display_graph(self, G, pos, dom_nodes=None, clique_nodes=None, node_labels=None, bridges=None):
-        self.scene.clear()
-        if not G or not pos:
-            return
-
-        dom_set = set(dom_nodes) if dom_nodes else set()
-        clique_set = set(clique_nodes) if clique_nodes else set()
-        labels_dict = node_labels if node_labels else {}
-
-        # Use frozenset for undirected edge matching
-        bridge_set = set()
-        if bridges:
-            for u, v in bridges:
-                bridge_set.add(frozenset([u, v]))
-
-        default_edge_pen = QPen(QColor(80, 80, 80, 100), 1)
-        clique_edge_pen = QPen(QColor("#00FF00"), 2)
-        bridge_edge_pen = QPen(QColor("#FF4444"), 2)  # Distinct color for bridges
-
-        normal_brush = QBrush(QColor("#00f2ff"))
-        dom_brush = QBrush(QColor("#FF8C00"))
-        clique_brush = QBrush(QColor("#00FF00"))
-        both_brush = QBrush(QColor("#FFFFFF"))
-        node_pen = QPen(Qt.GlobalColor.black, 1)
-
-        for u, v in G.edges():
-            if u in pos and v in pos:
-                if frozenset([u, v]) in bridge_set:
-                    pen = bridge_edge_pen
-                    z_val = 2
-                elif u in clique_set and v in clique_set:
-                    pen = clique_edge_pen
-                    z_val = 1
-                else:
-                    pen = default_edge_pen
-                    z_val = 0
-
-                line = self.scene.addLine(pos[u][0], pos[u][1], pos[v][0], pos[v][1], pen)
-                line.setZValue(z_val)
-
-        for node in G.nodes():
-            if node in pos:
-                x, y = pos[node]
-                is_dom = node in dom_set
-                is_clique = node in clique_set
-
-                if is_dom and is_clique:
-                    brush = both_brush
-                    radius = 8
-                elif is_clique:
-                    brush = clique_brush
-                    radius = 8
-                elif is_dom:
-                    brush = dom_brush
-                    radius = 7
-                else:
-                    brush = normal_brush
-                    radius = 5
-
-                diameter = radius * 2
-                ellipse = self.scene.addEllipse(x - radius, y - radius, diameter, diameter, node_pen, brush)
-                ellipse.setZValue(3 if (is_dom or is_clique) else 2)
-
-                # Render computation text labels if active
-                if node in labels_dict:
-                    text_item = self.scene.addText(labels_dict[node])
-
-                    font = QFont("Arial", 16)
-                    font.setBold(True)
-                    text_item.setFont(font)
-
-                    text_item.setDefaultTextColor(QColor("#FFFFFF"))
-                    text_item.setPos(x + radius, y - radius)
-                    text_item.setZValue(4)
-
-        rect = self.scene.itemsBoundingRect()
-        margin = 50
-        self.setSceneRect(rect.adjusted(-margin, -margin, margin, margin))
-        self.fitInView(self.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
-
-    def wheelEvent(self, event):
-        zoom_factor = 1.25 if event.angleDelta().y() > 0 else 0.8
-        self.scale(zoom_factor, zoom_factor)
 
 
 class MainWindow(QMainWindow):
@@ -516,13 +241,17 @@ class MainWindow(QMainWindow):
         # Grouped Generators into a submenu
         generate_menu = file_menu.addMenu("Generate")
 
-        gen_sf_action = QAction("Barabási-Albert (Scale-free)...", self)
+        gen_sf_action = QAction("Barabási-Albert (scale-free)...", self)
         gen_sf_action.triggered.connect(self.generate_scale_free)
         generate_menu.addAction(gen_sf_action)
 
-        gen_hk_action = QAction("Holme-Kim (Powerlaw Cluster)...", self)
+        gen_hk_action = QAction("Holme-Kim (powerlaw cluster)...", self)
         gen_hk_action.triggered.connect(self.generate_powerlaw_cluster)
         generate_menu.addAction(gen_hk_action)
+
+        gen_bollobas_action = QAction("BRTS model (scale-free with bridges)...", self)
+        gen_bollobas_action.triggered.connect(self.generate_scale_free_bridges)
+        generate_menu.addAction(gen_bollobas_action)
 
         compute_menu = menu_bar.addMenu("Compute")
 
@@ -620,6 +349,67 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Invalid Parameters", "m must be strictly less than n.")
                 return
             self.current_graph = nx.powerlaw_cluster_graph(n, m, p)
+            self.setup_new_graph()
+
+    # --- NEW GENERATOR IMPLEMENTATION HERE ---
+    def generate_scale_free_bridges(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Generate Scale-free Network (with bridges)")
+        layout = QFormLayout(dialog)
+
+        n_spin = QSpinBox()
+        n_spin.setRange(1, 100000)
+        n_spin.setValue(500)
+
+        alpha_spin = QDoubleSpinBox()
+        alpha_spin.setRange(0.0, 1.0)
+        alpha_spin.setSingleStep(0.05)
+        alpha_spin.setValue(0.41)
+
+        beta_spin = QDoubleSpinBox()
+        beta_spin.setRange(0.0, 1.0)
+        beta_spin.setSingleStep(0.05)
+        beta_spin.setValue(0.54)
+
+        gamma_spin = QDoubleSpinBox()
+        gamma_spin.setRange(0.0, 1.0)
+        gamma_spin.setSingleStep(0.05)
+        gamma_spin.setValue(0.05)
+
+        layout.addRow("Number of vertices (n):", n_spin)
+        layout.addRow("Prob. add node with out-edge (α):", alpha_spin)
+        layout.addRow("Prob. add edge between existing (β):", beta_spin)
+        layout.addRow("Prob. add node with in-edge (γ):", gamma_spin)
+
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(dialog.accept)
+        btns.rejected.connect(dialog.reject)
+        layout.addWidget(btns)
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            n = n_spin.value()
+            a = alpha_spin.value()
+            b = beta_spin.value()
+            c = gamma_spin.value()
+
+            total = a + b + c
+            if total <= 0:
+                QMessageBox.warning(self, "Invalid Parameters", "Sum of α, β, and γ must be > 0.")
+                return
+
+            # Normalize to ensure sum is exactly 1
+            a, b, c = a / total, b / total, c / total
+
+            # nx.scale_free_graph creates a directed Bollobás multigraph
+            H = nx.scale_free_graph(n, alpha=a, beta=b, gamma=c)
+
+            # Cast to an undirected simple graph to blend with your app natively
+            G = nx.Graph(H)
+
+            # Remove any self-loops that formed
+            G.remove_edges_from(list(nx.selfloop_edges(G)))
+
+            self.current_graph = G
             self.setup_new_graph()
 
     def open_file(self):
