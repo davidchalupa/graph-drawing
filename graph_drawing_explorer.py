@@ -16,6 +16,7 @@ from graph_canvas_optimized import GraphCanvasOptimized
 from dominating_set_thread import DominatingSetThread
 from clique_thread import CliqueThread
 from layout_thread import LayoutThread
+from kmedoids_thread import KMedoidsThread
 
 
 def load_from_col_file(file_path):
@@ -58,6 +59,9 @@ class MainWindow(QMainWindow):
 
         self.bridges = []
         self.show_bridges = False
+
+        self.kmedoids_clusters = {}
+        self.show_kmedoids = False
 
         self.stacked_widget = QStackedWidget()
         self.canvas_standard = GraphCanvas()
@@ -136,6 +140,12 @@ class MainWindow(QMainWindow):
         self.btn_toggle_br.setEnabled(False)
         self.btn_toggle_br.clicked.connect(self.toggle_bridges)
 
+        self.btn_toggle_km = QPushButton("⛭")
+        self.btn_toggle_km.setToolTip("Show k-Medoids Clusters")
+        self.btn_toggle_km.setCheckable(True)
+        self.btn_toggle_km.setEnabled(False)
+        self.btn_toggle_km.clicked.connect(self.toggle_kmedoids)
+
         # Layout Modes (Column 1)
         self.btn_radial = QPushButton("🌀")
         self.btn_radial.setToolTip("Radial layout")
@@ -163,6 +173,7 @@ class MainWindow(QMainWindow):
         grid_layout.addWidget(self.btn_toggle_cc, 2, 0)
         grid_layout.addWidget(self.btn_toggle_bc, 3, 0)
         grid_layout.addWidget(self.btn_toggle_br, 4, 0)
+        grid_layout.addWidget(self.btn_toggle_km, 5, 0)
 
         grid_layout.addWidget(self.btn_radial, 0, 1)
         grid_layout.addWidget(self.btn_pca, 1, 1)
@@ -170,7 +181,7 @@ class MainWindow(QMainWindow):
         grid_layout.addWidget(self.btn_lowcross, 3, 1)
         grid_layout.addWidget(self.btn_matrix, 4, 1)
 
-        grid_layout.setRowStretch(5, 1)  # Push everything up
+        grid_layout.setRowStretch(6, 1)  # Push everything up
         main_layout.addWidget(self.button_panel)
 
         self.overlay_container.setStyleSheet("""
@@ -284,6 +295,12 @@ class MainWindow(QMainWindow):
         br_action.triggered.connect(self.compute_bridges)
         compute_menu.addAction(br_action)
 
+        compute_menu.addSeparator()
+
+        km_action = QAction("k-Medoids clustering...", self)
+        km_action.triggered.connect(self.run_kmedoids_dialog)
+        compute_menu.addAction(km_action)
+
     def generate_scale_free(self):
         dialog = QDialog(self)
         dialog.setWindowTitle("Generate Scale-free Network")
@@ -351,7 +368,6 @@ class MainWindow(QMainWindow):
             self.current_graph = nx.powerlaw_cluster_graph(n, m, p)
             self.setup_new_graph()
 
-    # --- NEW GENERATOR IMPLEMENTATION HERE ---
     def generate_scale_free_bridges(self):
         dialog = QDialog(self)
         dialog.setWindowTitle("Generate Scale-free Network (with bridges)")
@@ -397,16 +413,10 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Invalid Parameters", "Sum of α, β, and γ must be > 0.")
                 return
 
-            # Normalize to ensure sum is exactly 1
             a, b, c = a / total, b / total, c / total
 
-            # nx.scale_free_graph creates a directed Bollobás multigraph
             H = nx.scale_free_graph(n, alpha=a, beta=b, gamma=c)
-
-            # Cast to an undirected simple graph to blend with your app natively
             G = nx.Graph(H)
-
-            # Remove any self-loops that formed
             G.remove_edges_from(list(nx.selfloop_edges(G)))
 
             self.current_graph = G
@@ -443,6 +453,12 @@ class MainWindow(QMainWindow):
         self.show_bridges = False
         self.btn_toggle_br.setEnabled(False)
         self.btn_toggle_br.setChecked(False)
+
+        # Reset k-medoids state
+        self.kmedoids_clusters = {}
+        self.show_kmedoids = False
+        self.btn_toggle_km.setEnabled(False)
+        self.btn_toggle_km.setChecked(False)
 
         num_nodes = self.current_graph.number_of_nodes()
         num_edges = self.current_graph.number_of_edges()
@@ -508,7 +524,7 @@ class MainWindow(QMainWindow):
             return
 
         img = QImage(n, n, QImage.Format.Format_RGB32)
-        img.fill(QColor("#0d0d0d"))  # Blends perfectly with canvas background
+        img.fill(QColor("#0d0d0d"))
 
         node_list = list(G.nodes())
         node_idx = {node: i for i, node in enumerate(node_list)}
@@ -546,13 +562,16 @@ class MainWindow(QMainWindow):
                 if lbls:
                     node_labels[n] = "\n".join(lbls)
 
+        # We leave the canvas display call unmodified for k-Medoids for now,
+        # waiting for your next step to update the canvas parameters.
         self.canvas.display_graph(
             self.current_graph,
             self.current_pos,
             self.dominating_set if self.show_dominating_set else None,
             self.clique if self.show_clique else None,
             node_labels=node_labels,
-            bridges=self.bridges if self.show_bridges else None
+            bridges=self.bridges if self.show_bridges else None,
+            kmedoids_clusters=self.kmedoids_clusters if self.show_kmedoids else None,
         )
 
     def toggle_dominating_set(self):
@@ -578,6 +597,12 @@ class MainWindow(QMainWindow):
     def toggle_bridges(self):
         self.show_bridges = self.btn_toggle_br.isChecked()
         if self.current_pos:
+            self.on_layout_finished(self.current_pos)
+
+    def toggle_kmedoids(self):
+        self.show_kmedoids = self.btn_toggle_km.isChecked()
+        if self.current_pos:
+            # Re-runs layout/rendering step; UI visualization logic can be built here next
             self.on_layout_finished(self.current_pos)
 
     def compute_clustering(self):
@@ -653,6 +678,45 @@ class MainWindow(QMainWindow):
             self.show_clique = True
             if self.current_pos: self.on_layout_finished(self.current_pos)
 
+    # --- k-Medoids Execution Flow ---
+    def run_kmedoids_dialog(self):
+        if not self.current_graph: return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("k-Medoids Clustering")
+        layout = QFormLayout(dialog)
+
+        k_spin = QSpinBox()
+        # Ensure max is bounded by node count
+        max_k = max(2, self.current_graph.number_of_nodes() - 1)
+        k_spin.setRange(2, max_k)
+        k_spin.setValue(3)
+
+        layout.addRow("Number of clusters (k):", k_spin)
+
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(dialog.accept)
+        btns.rejected.connect(dialog.reject)
+        layout.addWidget(btns)
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            k = k_spin.value()
+            self.run_kmedoids(k)
+
+    def run_kmedoids(self, k):
+        if not self.current_graph: return
+        self.km_thread = KMedoidsThread(self.current_graph, k)
+        self.km_thread.finished_computing.connect(self.on_kmedoids_finished)
+        self.km_thread.start()
+
+    def on_kmedoids_finished(self, clusters):
+        self.kmedoids_clusters = clusters
+        if clusters:
+            self.btn_toggle_km.setEnabled(True)
+            self.btn_toggle_km.setChecked(True)
+            self.show_kmedoids = True
+            if self.current_pos:
+                self.on_layout_finished(self.current_pos)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
