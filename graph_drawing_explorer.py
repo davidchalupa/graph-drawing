@@ -192,9 +192,9 @@ class MainWindow(QMainWindow):
                 border-radius: 4px;
                 padding: 10px;
                 font-weight: bold;
-                font-size: 20px;
-                min-width: 45px;
-                min-height: 45px;
+                font-size: 18px;
+                min-width: 35px;
+                min-height: 35px;
             }
             QPushButton#collapseBtn {
                 font-size: 14px;
