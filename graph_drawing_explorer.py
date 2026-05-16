@@ -1,6 +1,9 @@
 import sys
 import networkx as nx
 
+import numpy as np
+from scipy.spatial import Delaunay
+
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow,
     QFileDialog, QProgressDialog, QPushButton, QVBoxLayout, QWidget,
@@ -17,6 +20,23 @@ from dominating_set_thread import DominatingSetThread
 from clique_thread import CliqueThread
 from layout_thread import LayoutThread
 from kmedoids_thread import KMedoidsThread
+
+
+def generate_random_planar_graph(num_nodes):
+    # random 2D points
+    points = np.random.rand(num_nodes, 2)
+
+    # compute Delaunay triangulation (always planar)
+    tri = Delaunay(points)
+
+    # create networkx graph from triangulation edges
+    G = nx.Graph()
+    for path in tri.simplices:
+        G.add_edge(path[0], path[1])
+        G.add_edge(path[1], path[2])
+        G.add_edge(path[2], path[0])
+
+    return G, points
 
 
 def load_from_col_file(file_path):
@@ -264,6 +284,10 @@ class MainWindow(QMainWindow):
         gen_bollobas_action.triggered.connect(self.generate_scale_free_bridges)
         generate_menu.addAction(gen_bollobas_action)
 
+        gen_planar_action = QAction("Planar graph (Delaunay / Voronoi)...", self)
+        gen_planar_action.triggered.connect(self.generate_planar)
+        generate_menu.addAction(gen_planar_action)
+
         compute_menu = menu_bar.addMenu("Compute")
 
         dom_set_menu = compute_menu.addMenu("Dominating set")
@@ -418,6 +442,30 @@ class MainWindow(QMainWindow):
             H = nx.scale_free_graph(n, alpha=a, beta=b, gamma=c)
             G = nx.Graph(H)
             G.remove_edges_from(list(nx.selfloop_edges(G)))
+
+            self.current_graph = G
+            self.setup_new_graph()
+
+    def generate_planar(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Generate Planar Graph (Delaunay / Voronoi)")
+        layout = QFormLayout(dialog)
+
+        n_spin = QSpinBox()
+        n_spin.setRange(1, 100000)
+        n_spin.setValue(500)
+
+        layout.addRow("Number of vertices (n):", n_spin)
+
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(dialog.accept)
+        btns.rejected.connect(dialog.reject)
+        layout.addWidget(btns)
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            n = n_spin.value()
+
+            G, points = generate_random_planar_graph(n)
 
             self.current_graph = G
             self.setup_new_graph()
