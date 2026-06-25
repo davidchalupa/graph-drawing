@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow,
     QFileDialog, QProgressDialog, QPushButton, QVBoxLayout, QWidget,
     QStackedWidget, QDialog, QFormLayout,
-    QSpinBox, QDialogButtonBox, QMessageBox, QGridLayout, QDoubleSpinBox
+    QSpinBox, QDialogButtonBox, QMessageBox, QGridLayout, QDoubleSpinBox, QLabel
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QAction, QImage, QPixmap
@@ -94,6 +94,7 @@ class MainWindow(QMainWindow):
         self.canvas = self.canvas_standard
 
         self._setup_overlay_buttons()
+        self._setup_stats_overlay()
         self._setup_menu()
         self.showMaximized()
 
@@ -107,6 +108,26 @@ class MainWindow(QMainWindow):
 
         if hasattr(self, 'overlay_container'):
             self.overlay_container.raise_()
+
+    def _setup_stats_overlay(self):
+        self.stats_container = QWidget(self)
+        layout = QVBoxLayout(self.stats_container)
+        layout.setContentsMargins(10, 10, 10, 10)
+
+        self.stats_label = QLabel()
+        self.stats_label.setStyleSheet("""
+            color: #00f2ff; 
+            font-size: 16px; 
+            font-weight: bold;
+            background-color: rgba(13, 13, 13, 0.75);
+            border-radius: 4px;
+            padding: 5px;
+        """)
+        self.stats_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(self.stats_label)
+
+        self.stats_container.show()
+        self.stats_container.raise_()
 
     def _setup_overlay_buttons(self):
         self.overlay_container = QWidget(self)
@@ -252,11 +273,19 @@ class MainWindow(QMainWindow):
         self._update_overlay_position()
 
     def _update_overlay_position(self):
+        # 1. Keep the control buttons on the right side
         if hasattr(self, 'overlay_container'):
             self.overlay_container.adjustSize()
             w = self.overlay_container.width()
             h = self.overlay_container.height()
             self.overlay_container.setGeometry(self.width() - w - 20, 20, w, h)
+
+        # 2. Pin the stats metrics cleanly to the upper-left corner
+        if hasattr(self, 'stats_container'):
+            self.stats_container.adjustSize()
+            sw = self.stats_container.width()
+            sh = self.stats_container.height()
+            self.stats_container.setGeometry(20, 50, sw, sh)
 
     def _setup_menu(self):
         menu_bar = self.menuBar()
@@ -621,6 +650,16 @@ class MainWindow(QMainWindow):
             bridges=self.bridges if self.show_bridges else None,
             kmedoids_clusters=self.kmedoids_clusters if self.show_kmedoids else None,
         )
+
+        # --- Update Main UI Overlay Text ---
+        stats_lines = []
+        if self.show_dominating_set and self.dominating_set:
+            stats_lines.append(f"Dominating set size: {len(self.dominating_set)}")
+        if self.show_clique and self.clique:
+            stats_lines.append(f"Largest clique size: {len(self.clique)}")
+
+        self.stats_label.setText("\n".join(stats_lines))
+        self._update_overlay_position()
 
     def toggle_dominating_set(self):
         self.show_dominating_set = self.btn_toggle_ds.isChecked()
