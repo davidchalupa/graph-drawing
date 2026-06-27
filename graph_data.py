@@ -38,6 +38,23 @@ class GraphData:
     def __init__(self, parent_window):
         self.parent = parent_window
 
+        self.current_graph = None
+
+        # ToDo: really needed?
+        self.dominating_set = []
+        self.show_dominating_set = False
+        self.clique = []
+        self.show_clique = False
+        self.clustering_coeffs = {}
+        self.show_clustering = False
+        self.betweenness_cent = {}
+        self.show_betweenness = False
+        self.bridges = []
+        self.show_bridges = False
+        self.kmedoids_clusters = {}
+        self.show_kmedoids = False
+
+
     def open_file(self):
         # FIX 1: Pass self.parent to the dialog, not self!
         path, _ = QFileDialog.getOpenFileName(

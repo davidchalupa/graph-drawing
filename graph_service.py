@@ -199,10 +199,10 @@ class GraphService:
         try:
             raw_cc = nx.clustering(self.graph_data.current_graph)
             # FIX: Route UI changes to self.parent
-            self.parent.clustering_coeffs = {n: round(v, 3) for n, v in raw_cc.items()}
+            self.graph_data.clustering_coeffs = {n: round(v, 3) for n, v in raw_cc.items()}
             self.parent.btn_toggle_cc.setEnabled(True)
             self.parent.btn_toggle_cc.setChecked(True)
-            self.parent.show_clustering = True
+            self.graph_data.show_clustering = True
             if self.graph_data.current_pos:
                 self.graph_data.on_layout_finished(self.graph_data.current_pos)
         finally:
@@ -213,10 +213,10 @@ class GraphService:
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             raw_bc = nx.betweenness_centrality(self.graph_data.current_graph)
-            self.parent.betweenness_cent = {n: round(v, 4) for n, v in raw_bc.items()}
+            self.graph_data.betweenness_cent = {n: round(v, 4) for n, v in raw_bc.items()}
             self.parent.btn_toggle_bc.setEnabled(True)
             self.parent.btn_toggle_bc.setChecked(True)
-            self.parent.show_betweenness = True
+            self.graph_data.show_betweenness = True
             if self.graph_data.current_pos:
                 self.graph_data.on_layout_finished(self.graph_data.current_pos)
         finally:
@@ -226,10 +226,10 @@ class GraphService:
         if not self.graph_data.current_graph: return
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            self.parent.bridges = list(nx.bridges(self.graph_data.current_graph))
+            self.graph_data.bridges = list(nx.bridges(self.graph_data.current_graph))
             self.parent.btn_toggle_br.setEnabled(True)
             self.parent.btn_toggle_br.setChecked(True)
-            self.parent.show_bridges = True
+            self.graph_data.show_bridges = True
             if self.graph_data.current_pos:
                 self.graph_data.on_layout_finished(self.graph_data.current_pos)
         finally:

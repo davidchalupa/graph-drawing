@@ -32,23 +32,7 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("Network Graph Visualizer")
 
-        self.current_graph = None
         self.current_pos = None
-
-        self.clique = []
-        self.show_clique = False
-
-        self.clustering_coeffs = {}
-        self.show_clustering = False
-
-        self.betweenness_cent = {}
-        self.show_betweenness = False
-
-        self.bridges = []
-        self.show_bridges = False
-
-        self.kmedoids_clusters = {}
-        self.show_kmedoids = False
 
         self.stacked_widget = QStackedWidget()
         self.canvas_standard = GraphCanvas()
@@ -363,34 +347,34 @@ class MainWindow(QMainWindow):
         self.current_pos = pos
         node_labels = {}
 
-        if self.show_clustering or self.show_betweenness:
-            for n in self.current_graph.nodes():
+        if self.graph_data.show_clustering or self.graph_data.show_betweenness:
+            for n in self.graph_data.current_graph.nodes():
                 lbls = []
-                if self.show_clustering and n in self.clustering_coeffs:
-                    lbls.append(f"C: {self.clustering_coeffs[n]}")
-                if self.show_betweenness and n in self.betweenness_cent:
-                    lbls.append(f"B: {self.betweenness_cent[n]}")
+                if self.graph_data.show_clustering and n in self.graph_data.clustering_coeffs:
+                    lbls.append(f"C: {self.graph_data.clustering_coeffs[n]}")
+                if self.graph_data.show_betweenness and n in self.graph_data.betweenness_cent:
+                    lbls.append(f"B: {self.graph_data.betweenness_cent[n]}")
                 if lbls:
                     node_labels[n] = "\n".join(lbls)
 
         # We leave the canvas display call unmodified for k-Medoids for now,
         # waiting for your next step to update the canvas parameters.
         self.canvas.display_graph(
-            self.current_graph,
+            self.graph_data.current_graph,
             self.current_pos,
-            self.graph_data.dominating_set if self.graph_data.graph_data.show_dominating_set else None,
-            self.clique if self.show_clique else None,
+            self.graph_data.dominating_set if self.graph_data.show_dominating_set else None,
+            self.graph_data.clique if self.graph_data.show_clique else None,
             node_labels=node_labels,
-            bridges=self.bridges if self.show_bridges else None,
-            kmedoids_clusters=self.kmedoids_clusters if self.show_kmedoids else None,
+            bridges=self.graph_data.bridges if self.graph_data.show_bridges else None,
+            kmedoids_clusters=self.graph_data.kmedoids_clusters if self.graph_data.show_kmedoids else None,
         )
 
         # --- Update Main UI Overlay Text ---
         stats_lines = []
         if self.graph_data.show_dominating_set and self.graph_data.dominating_set:
             stats_lines.append(f"Dominating set size: {len(self.graph_data.dominating_set)}")
-        if self.show_clique and self.clique:
-            stats_lines.append(f"Largest clique size: {len(self.clique)}")
+        if self.graph_data.show_clique and self.graph_data.clique:
+            stats_lines.append(f"Largest clique size: {len(self.graph_data.clique)}")
 
         self.stats_label.setText("\n".join(stats_lines))
         self._update_overlay_position()
@@ -401,27 +385,27 @@ class MainWindow(QMainWindow):
             self.on_layout_finished(self.current_pos)
 
     def toggle_clique(self):
-        self.show_clique = self.btn_toggle_cl.isChecked()
+        self.graph_data.show_clique = self.btn_toggle_cl.isChecked()
         if self.current_pos:
             self.on_layout_finished(self.current_pos)
 
     def toggle_clustering(self):
-        self.show_clustering = self.btn_toggle_cc.isChecked()
+        self.graph_data.show_clustering = self.btn_toggle_cc.isChecked()
         if self.current_pos:
             self.on_layout_finished(self.current_pos)
 
     def toggle_betweenness(self):
-        self.show_betweenness = self.btn_toggle_bc.isChecked()
+        self.graph_data.show_betweenness = self.btn_toggle_bc.isChecked()
         if self.current_pos:
             self.on_layout_finished(self.current_pos)
 
     def toggle_bridges(self):
-        self.show_bridges = self.btn_toggle_br.isChecked()
+        self.graph_data.show_bridges = self.btn_toggle_br.isChecked()
         if self.current_pos:
             self.on_layout_finished(self.current_pos)
 
     def toggle_kmedoids(self):
-        self.show_kmedoids = self.btn_toggle_km.isChecked()
+        self.graph_data.show_kmedoids = self.btn_toggle_km.isChecked()
         if self.current_pos:
             # Re-runs layout/rendering step; UI visualization logic can be built here next
             self.on_layout_finished(self.current_pos)
@@ -437,14 +421,14 @@ class MainWindow(QMainWindow):
         if not graph:
             return
 
-        if self.show_clustering or self.show_betweenness:
+        if self.graph_data.show_clustering or self.graph_data.show_betweenness:
             # FIX: Iterate over the real graph's nodes
             for n in graph.nodes():
                 lbls = []
-                if self.show_clustering and n in self.clustering_coeffs:
-                    lbls.append(f"C: {self.clustering_coeffs[n]}")
-                if self.show_betweenness and n in self.betweenness_cent:
-                    lbls.append(f"B: {self.betweenness_cent[n]}")
+                if self.graph_data.show_clustering and n in self.graph_data.clustering_coeffs:
+                    lbls.append(f"C: {self.graph_data.clustering_coeffs[n]}")
+                if self.graph_data.show_betweenness and n in self.graph_data.betweenness_cent:
+                    lbls.append(f"B: {self.graph_data.betweenness_cent[n]}")
                 if lbls:
                     node_labels[n] = "\n".join(lbls)
 
@@ -452,18 +436,18 @@ class MainWindow(QMainWindow):
             graph,  # FIX: Pass the real graph here
             self.current_pos,
             self.graph_data.dominating_set if self.graph_data.show_dominating_set else None,
-            self.clique if self.show_clique else None,
+            self.graph_data.clique if self.graph_data.show_clique else None,
             node_labels=node_labels,
-            bridges=self.bridges if self.show_bridges else None,
-            kmedoids_clusters=self.kmedoids_clusters if self.show_kmedoids else None,
+            bridges=self.graph_data.bridges if self.graph_data.show_bridges else None,
+            kmedoids_clusters=self.graph_data.kmedoids_clusters if self.graph_data.show_kmedoids else None,
         )
 
         # --- Update Main UI Overlay Text ---
         stats_lines = []
         if self.graph_data.show_dominating_set and self.graph_data.dominating_set:
             stats_lines.append(f"Dominating set size: {len(self.graph_data.dominating_set)}")
-        if self.show_clique and self.clique:
-            stats_lines.append(f"Largest clique size: {len(self.clique)}")
+        if self.graph_data.show_clique and self.graph_data.clique:
+            stats_lines.append(f"Largest clique size: {len(self.graph_data.clique)}")
 
         self.stats_label.setText("\n".join(stats_lines))
         self._update_overlay_position()
