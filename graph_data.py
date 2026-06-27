@@ -1,17 +1,7 @@
-import sys
 import networkx as nx
 
-import numpy as np
-from scipy.spatial import Delaunay
-
-from PyQt6.QtWidgets import (
-    QApplication, QMainWindow,
-    QFileDialog, QProgressDialog, QPushButton, QVBoxLayout, QWidget,
-    QStackedWidget, QDialog, QFormLayout,
-    QSpinBox, QDialogButtonBox, QMessageBox, QGridLayout, QDoubleSpinBox, QLabel
-)
+from PyQt6.QtWidgets import  QFileDialog, QProgressDialog
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QAction, QImage, QPixmap
 
 from layout_thread import LayoutThread
 
@@ -37,26 +27,9 @@ def load_from_col_file(file_path):
 class GraphData:
     def __init__(self, parent_window):
         self.parent = parent_window
-
         self.current_graph = None
 
-        # ToDo: really needed?
-        self.dominating_set = []
-        self.show_dominating_set = False
-        self.clique = []
-        self.show_clique = False
-        self.clustering_coeffs = {}
-        self.show_clustering = False
-        self.betweenness_cent = {}
-        self.show_betweenness = False
-        self.bridges = []
-        self.show_bridges = False
-        self.kmedoids_clusters = {}
-        self.show_kmedoids = False
-
-
     def open_file(self):
-        # FIX 1: Pass self.parent to the dialog, not self!
         path, _ = QFileDialog.getOpenFileName(
             self.parent, "Open Graph", "", "Graph Files (*.col *.graphml *.gml)"
         )
@@ -68,7 +41,6 @@ class GraphData:
         self.dominating_set = []
         self.show_dominating_set = False
 
-        # FIX 2: Add self.parent. to all UI elements
         self.parent.btn_toggle_ds.setEnabled(False)
         self.parent.btn_toggle_ds.setChecked(False)
 
@@ -101,7 +73,6 @@ class GraphData:
         num_nodes = self.current_graph.number_of_nodes()
         num_edges = self.current_graph.number_of_edges()
 
-        # FIX 3: Route methods through self.parent
         if num_nodes > 4000 or num_edges > 10000:
             self.parent.switch_canvas(optimized=True)
         else:
@@ -133,7 +104,6 @@ class GraphData:
     def run_layout(self, mode):
         if getattr(self, 'current_graph', None) is None: return
 
-        # FIX 4: Add self.parent. to the buttons dict
         buttons = {
             "pca": self.parent.btn_pca,
             "spring": self.parent.btn_spring,
@@ -151,7 +121,7 @@ class GraphData:
             return
 
         msg = "Calculating graph layout. This may take a moment..."
-        # FIX 5: Pass self.parent to QProgressDialog
+
         self.progress = QProgressDialog(msg, None, 0, 0, self.parent)
         self.progress.setWindowModality(Qt.WindowModality.WindowModal)
         self.progress.setWindowTitle("Progress")

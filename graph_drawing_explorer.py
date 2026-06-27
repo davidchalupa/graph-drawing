@@ -1,25 +1,14 @@
 import sys
-import networkx as nx
-
-import numpy as np
-from scipy.spatial import Delaunay
 
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow,
-    QFileDialog, QProgressDialog, QPushButton, QVBoxLayout, QWidget,
-    QStackedWidget, QDialog, QFormLayout,
-    QSpinBox, QDialogButtonBox, QMessageBox, QGridLayout, QDoubleSpinBox, QLabel
+    QApplication, QMainWindow, QPushButton, QVBoxLayout, QWidget,
+    QStackedWidget, QGridLayout, QLabel
 )
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QAction, QImage, QPixmap
+from PyQt6.QtGui import QAction
 
 from graph_canvas import GraphCanvas
 from graph_canvas_optimized import GraphCanvasOptimized
-
-from dominating_set_thread import DominatingSetThread
-from clique_thread import CliqueThread
-from layout_thread import LayoutThread
-from kmedoids_thread import KMedoidsThread
 
 from graph_data import GraphData
 from graph_service import GraphService
@@ -41,6 +30,7 @@ class MainWindow(QMainWindow):
 
         self.graph_data = GraphData(self)
         self.graph_service = GraphService(parent_window=self, graph_data=self.graph_data)
+        self.ui_service = UIService(parent_window=self, graph_data=self.graph_data)
 
         self.stacked_widget.addWidget(self.canvas_standard)
         self.stacked_widget.addWidget(self.canvas_optimized)
@@ -52,17 +42,6 @@ class MainWindow(QMainWindow):
         self._setup_menu()
 
         self.showMaximized()
-
-    def switch_canvas(self, optimized: bool):
-        if optimized:
-            self.stacked_widget.setCurrentWidget(self.canvas_optimized)
-            self.canvas = self.canvas_optimized
-        else:
-            self.stacked_widget.setCurrentWidget(self.canvas_standard)
-            self.canvas = self.canvas_standard
-
-        if hasattr(self, 'overlay_container'):
-            self.overlay_container.raise_()
 
     def _setup_stats_overlay(self):
         self.stats_container = QWidget(self)
@@ -96,7 +75,7 @@ class MainWindow(QMainWindow):
         # 1. Expand/Collapse Button
         self.btn_collapse = QPushButton("▶ Hide")
         self.btn_collapse.setToolTip("Toggle Menu Visibility")
-        self.btn_collapse.clicked.connect(self.toggle_menu_visibility)
+        self.btn_collapse.clicked.connect(self.ui_service.toggle_menu_visibility)
         main_layout.addWidget(self.btn_collapse, alignment=Qt.AlignmentFlag.AlignRight)
 
         # 2. Main Buttons Panel
@@ -110,37 +89,37 @@ class MainWindow(QMainWindow):
         self.btn_toggle_ds.setToolTip("Show Dominating Set")
         self.btn_toggle_ds.setCheckable(True)
         self.btn_toggle_ds.setEnabled(False)
-        self.btn_toggle_ds.clicked.connect(self.toggle_dominating_set)
+        self.btn_toggle_ds.clicked.connect(self.ui_service.toggle_dominating_set)
 
         self.btn_toggle_cl = QPushButton("⭐")
         self.btn_toggle_cl.setToolTip("Show Clique")
         self.btn_toggle_cl.setCheckable(True)
         self.btn_toggle_cl.setEnabled(False)
-        self.btn_toggle_cl.clicked.connect(self.toggle_clique)
+        self.btn_toggle_cl.clicked.connect(self.ui_service.toggle_clique)
 
         self.btn_toggle_cc = QPushButton("△")
         self.btn_toggle_cc.setToolTip("Show Clustering Coefficients")
         self.btn_toggle_cc.setCheckable(True)
         self.btn_toggle_cc.setEnabled(False)
-        self.btn_toggle_cc.clicked.connect(self.toggle_clustering)
+        self.btn_toggle_cc.clicked.connect(self.ui_service.toggle_clustering)
 
         self.btn_toggle_bc = QPushButton("⛬")
         self.btn_toggle_bc.setToolTip("Show Betweenness Centrality")
         self.btn_toggle_bc.setCheckable(True)
         self.btn_toggle_bc.setEnabled(False)
-        self.btn_toggle_bc.clicked.connect(self.toggle_betweenness)
+        self.btn_toggle_bc.clicked.connect(self.ui_service.toggle_betweenness)
 
         self.btn_toggle_br = QPushButton("🔗")
         self.btn_toggle_br.setToolTip("Show Bridges")
         self.btn_toggle_br.setCheckable(True)
         self.btn_toggle_br.setEnabled(False)
-        self.btn_toggle_br.clicked.connect(self.toggle_bridges)
+        self.btn_toggle_br.clicked.connect(self.ui_service.toggle_bridges)
 
         self.btn_toggle_km = QPushButton("⛭")
         self.btn_toggle_km.setToolTip("Show k-Medoids Clusters")
         self.btn_toggle_km.setCheckable(True)
         self.btn_toggle_km.setEnabled(False)
-        self.btn_toggle_km.clicked.connect(self.toggle_kmedoids)
+        self.btn_toggle_km.clicked.connect(self.ui_service.toggle_kmedoids)
 
         # Layout Modes (Column 1)
         self.btn_radial = QPushButton("🌀")
@@ -218,31 +197,6 @@ class MainWindow(QMainWindow):
         self.overlay_container.show()
         self.overlay_container.raise_()
 
-    def toggle_menu_visibility(self):
-        is_visible = self.button_panel.isVisible()
-        self.button_panel.setVisible(not is_visible)
-        self.btn_collapse.setText("◀ Show" if is_visible else "▶ Hide")
-        self._update_overlay_position()
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._update_overlay_position()
-
-    def _update_overlay_position(self):
-        # 1. Keep the control buttons on the right side
-        if hasattr(self, 'overlay_container'):
-            self.overlay_container.adjustSize()
-            w = self.overlay_container.width()
-            h = self.overlay_container.height()
-            self.overlay_container.setGeometry(self.width() - w - 20, 20, w, h)
-
-        # 2. Pin the stats metrics cleanly to the upper-left corner
-        if hasattr(self, 'stats_container'):
-            self.stats_container.adjustSize()
-            sw = self.stats_container.width()
-            sh = self.stats_container.height()
-            self.stats_container.setGeometry(20, 50, sw, sh)
-
     def _setup_menu(self):
         menu_bar = self.menuBar()
         file_menu = menu_bar.addMenu("File")
@@ -310,34 +264,38 @@ class MainWindow(QMainWindow):
         km_action.triggered.connect(self.graph_service.run_kmedoids_dialog)
         compute_menu.addAction(km_action)
 
+    def update_overlay_position(self):
+        # 1. Keep the control buttons on the right side
+        if hasattr(self, 'overlay_container'):
+            self.overlay_container.adjustSize()
+            w = self.overlay_container.width()
+            h = self.overlay_container.height()
+            self.overlay_container.setGeometry(self.width() - w - 20, 20, w, h)
+
+        # 2. Pin the stats metrics cleanly to the upper-left corner
+        if hasattr(self, 'stats_container'):
+            self.stats_container.adjustSize()
+            sw = self.stats_container.width()
+            sh = self.stats_container.height()
+            self.stats_container.setGeometry(20, 50, sw, sh)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.update_overlay_position()
+
+    def switch_canvas(self, optimized: bool):
+        if optimized:
+            self.stacked_widget.setCurrentWidget(self.canvas_optimized)
+            self.canvas = self.canvas_optimized
+        else:
+            self.stacked_widget.setCurrentWidget(self.canvas_standard)
+            self.canvas = self.canvas_standard
+
+        if hasattr(self, 'overlay_container'):
+            self.overlay_container.raise_()
+
     def show_adjacency_matrix(self):
-        G = self.graph_data.current_graph
-        n = G.number_of_nodes()
-
-        if n > 10000:
-            QMessageBox.warning(self, "Too Large", "Graph is too large to render as a bitmap (>10,000 nodes).")
-            return
-
-        img = QImage(n, n, QImage.Format.Format_RGB32)
-        img.fill(QColor("#0d0d0d"))
-
-        node_list = list(G.nodes())
-        node_idx = {node: i for i, node in enumerate(node_list)}
-
-        fg_color = QColor("#00f2ff")
-
-        for u, v in G.edges():
-            i, j = node_idx[u], node_idx[v]
-            img.setPixelColor(i, j, fg_color)
-            img.setPixelColor(j, i, fg_color)
-
-        pixmap = QPixmap.fromImage(img)
-        self.canvas.scene.clear()
-        item = self.canvas.scene.addPixmap(pixmap)
-
-        rect = item.boundingRect()
-        self.canvas.setSceneRect(rect.adjusted(-50, -50, 50, 50))
-        self.canvas.fitInView(self.canvas.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        self.ui_service.show_adjacency_matrix()
 
     def on_layout_finished(self, pos):
         if hasattr(self, 'progress') and self.progress is not None:
@@ -369,7 +327,7 @@ class MainWindow(QMainWindow):
             kmedoids_clusters=self.graph_data.kmedoids_clusters if self.graph_data.show_kmedoids else None,
         )
 
-        # --- Update Main UI Overlay Text ---
+        # Update Main UI Overlay Text
         stats_lines = []
         if self.graph_data.show_dominating_set and self.graph_data.dominating_set:
             stats_lines.append(f"Dominating set size: {len(self.graph_data.dominating_set)}")
@@ -377,80 +335,7 @@ class MainWindow(QMainWindow):
             stats_lines.append(f"Largest clique size: {len(self.graph_data.clique)}")
 
         self.stats_label.setText("\n".join(stats_lines))
-        self._update_overlay_position()
-
-    def toggle_dominating_set(self):
-        self.graph_data.show_dominating_set = self.btn_toggle_ds.isChecked()
-        if self.current_pos:
-            self.on_layout_finished(self.current_pos)
-
-    def toggle_clique(self):
-        self.graph_data.show_clique = self.btn_toggle_cl.isChecked()
-        if self.current_pos:
-            self.on_layout_finished(self.current_pos)
-
-    def toggle_clustering(self):
-        self.graph_data.show_clustering = self.btn_toggle_cc.isChecked()
-        if self.current_pos:
-            self.on_layout_finished(self.current_pos)
-
-    def toggle_betweenness(self):
-        self.graph_data.show_betweenness = self.btn_toggle_bc.isChecked()
-        if self.current_pos:
-            self.on_layout_finished(self.current_pos)
-
-    def toggle_bridges(self):
-        self.graph_data.show_bridges = self.btn_toggle_br.isChecked()
-        if self.current_pos:
-            self.on_layout_finished(self.current_pos)
-
-    def toggle_kmedoids(self):
-        self.graph_data.show_kmedoids = self.btn_toggle_km.isChecked()
-        if self.current_pos:
-            # Re-runs layout/rendering step; UI visualization logic can be built here next
-            self.on_layout_finished(self.current_pos)
-
-    def on_layout_finished(self, pos):
-        self.current_pos = pos
-        node_labels = {}
-
-        # FIX: Point to the actual graph object
-        graph = self.graph_data.current_graph
-
-        # Guard clause just in case
-        if not graph:
-            return
-
-        if self.graph_data.show_clustering or self.graph_data.show_betweenness:
-            # FIX: Iterate over the real graph's nodes
-            for n in graph.nodes():
-                lbls = []
-                if self.graph_data.show_clustering and n in self.graph_data.clustering_coeffs:
-                    lbls.append(f"C: {self.graph_data.clustering_coeffs[n]}")
-                if self.graph_data.show_betweenness and n in self.graph_data.betweenness_cent:
-                    lbls.append(f"B: {self.graph_data.betweenness_cent[n]}")
-                if lbls:
-                    node_labels[n] = "\n".join(lbls)
-
-        self.canvas.display_graph(
-            graph,  # FIX: Pass the real graph here
-            self.current_pos,
-            self.graph_data.dominating_set if self.graph_data.show_dominating_set else None,
-            self.graph_data.clique if self.graph_data.show_clique else None,
-            node_labels=node_labels,
-            bridges=self.graph_data.bridges if self.graph_data.show_bridges else None,
-            kmedoids_clusters=self.graph_data.kmedoids_clusters if self.graph_data.show_kmedoids else None,
-        )
-
-        # --- Update Main UI Overlay Text ---
-        stats_lines = []
-        if self.graph_data.show_dominating_set and self.graph_data.dominating_set:
-            stats_lines.append(f"Dominating set size: {len(self.graph_data.dominating_set)}")
-        if self.graph_data.show_clique and self.graph_data.clique:
-            stats_lines.append(f"Largest clique size: {len(self.graph_data.clique)}")
-
-        self.stats_label.setText("\n".join(stats_lines))
-        self._update_overlay_position()
+        self.update_overlay_position()
 
 
 if __name__ == "__main__":

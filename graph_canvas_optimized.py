@@ -94,7 +94,8 @@ class GraphCanvasOptimized(QGraphicsView):
         self.viewport().update()
         super().mouseReleaseEvent(event)
 
-    def display_graph(self, G, pos, dom_nodes=None, clique_nodes=None, node_labels=None, bridges=None):
+    # ToDo: kmedoids_clusters ignored so far
+    def display_graph(self, G, pos, dom_nodes=None, clique_nodes=None, node_labels=None, bridges=None, kmedoids_clusters=None):
         self.scene.clear()
         if not G or not pos:
             return

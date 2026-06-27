@@ -1,24 +1,17 @@
-import sys
 import networkx as nx
 
 import numpy as np
 from scipy.spatial import Delaunay
 
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow,
-    QFileDialog, QProgressDialog, QPushButton, QVBoxLayout, QWidget,
-    QStackedWidget, QDialog, QFormLayout,
-    QSpinBox, QDialogButtonBox, QMessageBox, QGridLayout, QDoubleSpinBox, QLabel
+    QApplication, QDialog, QFormLayout,
+    QSpinBox, QDialogButtonBox, QMessageBox, QDoubleSpinBox
 )
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QAction, QImage, QPixmap
 
 from dominating_set_thread import DominatingSetThread
 from clique_thread import CliqueThread
-from layout_thread import LayoutThread
 from kmedoids_thread import KMedoidsThread
-
-from graph_data import GraphData
 
 
 def generate_random_planar_graph(num_nodes):
@@ -189,7 +182,6 @@ class GraphService:
             G, points = generate_random_planar_graph(n)
 
             self.graph_data.current_graph = G
-            # FIX: Added self. prefix
             self.graph_data.setup_new_graph()
 
     def compute_clustering(self):
@@ -198,7 +190,6 @@ class GraphService:
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             raw_cc = nx.clustering(self.graph_data.current_graph)
-            # FIX: Route UI changes to self.parent
             self.graph_data.clustering_coeffs = {n: round(v, 3) for n, v in raw_cc.items()}
             self.parent.btn_toggle_cc.setEnabled(True)
             self.parent.btn_toggle_cc.setChecked(True)
@@ -238,7 +229,6 @@ class GraphService:
     def run_dominating_set(self):
         if not self.graph_data.current_graph: return
         self.ds_thread = DominatingSetThread(self.graph_data.current_graph)
-        # FIX: Connect the signal to graph_data where the method actually lives
         self.ds_thread.finished_computing.connect(self.graph_data.on_ds_finished)
         self.ds_thread.start()
 
@@ -251,7 +241,6 @@ class GraphService:
     def _run_clique(self, alg):
         if not self.graph_data.current_graph: return
         self.cl_thread = CliqueThread(self.graph_data.current_graph, alg)
-        # FIX: Connect signal to graph_data
         self.cl_thread.finished_computing.connect(self.graph_data.on_clique_finished)
         self.cl_thread.start()
 
@@ -281,6 +270,5 @@ class GraphService:
     def run_kmedoids(self, k):
         if not self.graph_data.current_graph: return
         self.km_thread = KMedoidsThread(self.graph_data.current_graph, k)
-        # FIX: Connect signal to graph_data
         self.km_thread.finished_computing.connect(self.graph_data.on_kmedoids_finished)
         self.km_thread.start()
