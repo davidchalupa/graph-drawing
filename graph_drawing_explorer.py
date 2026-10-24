@@ -235,6 +235,10 @@ class MainWindow(QMainWindow):
         export_png_action.triggered.connect(self.ui_service.export_graph_png)
         export_menu.addAction(export_png_action)
 
+        export_svg_action = QAction("Export Graph Drawing (SVG)...", self)
+        export_svg_action.triggered.connect(self.ui_service.export_graph_svg)
+        export_menu.addAction(export_svg_action)
+
         compute_menu = menu_bar.addMenu("Compute")
 
         dom_set_menu = compute_menu.addMenu("Dominating set")

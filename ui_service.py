@@ -1,5 +1,6 @@
 from PyQt6.QtWidgets import QMessageBox, QFileDialog
-from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtCore import Qt, QSize, QRectF
+from PyQt6.QtSvg import QSvgGenerator
 from PyQt6.QtGui import QColor, QImage, QPixmap, QPainter
 
 
@@ -107,3 +108,48 @@ class UIService:
             QMessageBox.information(self.parent, "Export Successful", f"Graph successfully exported to:\n{file_path}")
         else:
             QMessageBox.warning(self.parent, "Export Error", "Failed to save the PNG file.")
+
+    def export_graph_svg(self):
+        canvas = self.parent.canvas
+        if not canvas:
+            QMessageBox.warning(self.parent, "Export Error", "No canvas found.")
+            return
+
+        scene = getattr(canvas, 'scene', None)
+        if not scene or not scene.items():
+            QMessageBox.warning(self.parent, "Export Error", "No graph is currently displayed to export.")
+            return
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self.parent,
+            "Export Graph Drawing as SVG",
+            "graph_drawing.svg",
+            "SVG Files (*.svg);;All Files (*)"
+        )
+
+        if not file_path:
+            return
+
+        viewport_rect = canvas.viewport().rect()
+
+        generator = QSvgGenerator()
+        generator.setFileName(file_path)
+        generator.setSize(viewport_rect.size())
+        generator.setViewBox(viewport_rect)
+        generator.setTitle("Network Graph Visualizer Export")
+        generator.setDescription("Vector export generated via PyQt6 QSvgGenerator")
+
+        painter = QPainter()
+        if painter.begin(generator):
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+            # Fill the background to match your dark theme (#0d0d0d)
+            painter.fillRect(viewport_rect, QColor("#0d0d0d"))
+
+            # Render the view directly (same as PNG export)
+            canvas.render(painter)
+            painter.end()
+
+            QMessageBox.information(self.parent, "Export Successful", f"Graph successfully exported to:\n{file_path}")
+        else:
+            QMessageBox.warning(self.parent, "Export Error", "Failed to generate the SVG file.")
