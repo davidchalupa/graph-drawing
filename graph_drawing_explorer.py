@@ -227,6 +227,14 @@ class MainWindow(QMainWindow):
         gen_planar_action.triggered.connect(self.graph_service.generate_planar)
         generate_menu.addAction(gen_planar_action)
 
+        file_menu.addSeparator()
+
+        # Export Submenu
+        export_menu = file_menu.addMenu("Export")
+        export_png_action = QAction("Export Graph Drawing (PNG)...", self)
+        export_png_action.triggered.connect(self.ui_service.export_graph_png)
+        export_menu.addAction(export_png_action)
+
         compute_menu = menu_bar.addMenu("Compute")
 
         dom_set_menu = compute_menu.addMenu("Dominating set")

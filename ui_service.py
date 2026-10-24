@@ -1,6 +1,6 @@
-from PyQt6.QtWidgets import QMessageBox
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QImage, QPixmap
+from PyQt6.QtWidgets import QMessageBox, QFileDialog
+from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtGui import QColor, QImage, QPixmap, QPainter
 
 
 class UIService:
@@ -72,3 +72,38 @@ class UIService:
         self.graph_data.show_kmedoids = self.parent.btn_toggle_km.isChecked()
         if self.parent.current_pos:
             self.parent.on_layout_finished(self.parent.current_pos)
+
+    def export_graph_png(self):
+        canvas = self.parent.canvas
+        if not canvas:
+            QMessageBox.warning(self.parent, "Export Error", "No canvas found.")
+            return
+
+        scene = getattr(canvas, 'scene', None)
+        if not scene or not scene.items():
+            QMessageBox.warning(self.parent, "Export Error", "No graph is currently displayed to export.")
+            return
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self.parent,
+            "Export Graph Drawing as PNG",
+            "graph_drawing.png",
+            "PNG Files (*.png);;All Files (*)"
+        )
+
+        if not file_path:
+            return
+
+        viewport_rect = canvas.viewport().rect()
+        image = QImage(viewport_rect.size(), QImage.Format.Format_ARGB32)
+        image.fill(QColor("#0d0d0d"))
+
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        canvas.render(painter)
+        painter.end()
+
+        if image.save(file_path, "PNG"):
+            QMessageBox.information(self.parent, "Export Successful", f"Graph successfully exported to:\n{file_path}")
+        else:
+            QMessageBox.warning(self.parent, "Export Error", "Failed to save the PNG file.")
